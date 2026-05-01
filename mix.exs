@@ -70,6 +70,7 @@ defmodule Heartbeats.MixProject do
       {:bandit, "~> 1.5"},
       {:libcluster, "~> 3.5"},
       {:libring, "~> 1.7"},
+      {:uxid, "~> 2.3"},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
       {:excoveralls, "~> 0.18.5", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

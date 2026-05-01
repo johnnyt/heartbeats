@@ -14,6 +14,10 @@ defmodule Heartbeats.Application do
       ] ++
         cluster_children() ++
         [
+          {Registry, keys: :unique, name: Heartbeats.Registry},
+          Heartbeats.Subscriptions,
+          Heartbeats.WorkerSupervisor,
+          Heartbeats.Placement,
           HeartbeatsWeb.Endpoint
         ]
 

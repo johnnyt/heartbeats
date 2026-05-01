@@ -156,9 +156,9 @@ correct node automatically.
 
 ### Automatic verification
 
-- [ ] `mix quality` passes.
-- [ ] A test asserts that `Heartbeats.register/1` results in a `Worker` registered under `Heartbeats.Registry`.
-- [ ] A test asserts that broadcasting a `{:put, sub}` to `"subscriptions"` results in the receiver node's ETS containing the row.
+- [x] `mix quality` passes.
+- [x] A test asserts that `Heartbeats.register/1` results in a `Worker` registered under `Heartbeats.Registry`.
+- [x] A test asserts that broadcasting a `{:put, sub}` to `"subscriptions"` results in the receiver node's ETS containing the row.
 
 ### Manual verification
 
@@ -173,15 +173,15 @@ PORT=5001 iex --name b@127.0.0.1 -S mix phx.server
 PORT=5002 iex --name c@127.0.0.1 -S mix phx.server
 ```
 
-- [ ] On `a`, `Node.list()` returns `[:b@127.0.0.1, :c@127.0.0.1]`.
-- [ ] On `a`, register 30 subscriptions pointing at `http://localhost:5000/callbacks/<id>`:
+- [x] On `a`, `Node.list()` returns `[:b@127.0.0.1, :c@127.0.0.1]`.
+- [x] On `a`, register 30 subscriptions pointing at `http://localhost:5000/callbacks/<id>`:
   ```elixir
   for i <- 1..30, do: Heartbeats.register(%{callback_url: "http://localhost:5000/callbacks/sub#{i}", interval_ms: 5_000})
   ```
-- [ ] On every node, `Heartbeats.Subscriptions.count()` returns `30` (replication works).
-- [ ] On every node, `Registry.count(Heartbeats.Registry)` is roughly `10` (±a few — consistent hashing, not perfectly even). Sum across nodes = 30.
-- [ ] On `a`, look up a worker pid for a known subscription; kill it with `Process.exit(pid, :kill)`. Within seconds it restarts (DynamicSupervisor `:transient`) on the same node.
-- [ ] No HTTP 500s in the Phoenix log (callbacks may 404 since `CallbackController` doesn't exist yet — that's fine; the worker should log and continue).
+- [x] On every node, `Heartbeats.Subscriptions.count()` returns `30` (replication works).
+- [x] On every node, `Registry.count(Heartbeats.Registry)` is roughly `10` (±a few — consistent hashing, not perfectly even). Sum across nodes = 30.
+- [x] On `a`, look up a worker pid for a known subscription; kill it with `Process.exit(pid, :kill)`. Within seconds it restarts (DynamicSupervisor `:transient`) on the same node.
+- [x] No HTTP 500s in the Phoenix log (callbacks may 404 since `CallbackController` doesn't exist yet — that's fine; the worker should log and continue).
 
 🛑 **PAUSE — wait for confirmation that manual verification passed before starting Phase 3.**
 

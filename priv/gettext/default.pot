@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 
-#: lib/heartbeats_web/components/core_components.ex:368
+#: lib/heartbeats_web/components/core_components.ex:369
 #, elixir-autogen, elixir-format
 msgid "Actions"
 msgstr ""
@@ -32,7 +32,7 @@ msgstr ""
 msgid "We can't find the internet"
 msgstr ""
 
-#: lib/heartbeats_web/components/core_components.ex:74
+#: lib/heartbeats_web/components/core_components.ex:75
 #, elixir-autogen, elixir-format
 msgid "close"
 msgstr ""
