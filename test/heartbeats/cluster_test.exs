@@ -78,6 +78,23 @@ defmodule Heartbeats.ClusterTest do
     assert worker_count(b) <= initial_b
   end
 
+  test "callback stats replicate across the cluster" do
+    [a, b, c] = start_cluster(3)
+
+    # Record callbacks on a; every peer should converge to the same view.
+    :erpc.call(a, Heartbeats.CallbackStats, :record, ["sub_x"])
+    :erpc.call(a, Heartbeats.CallbackStats, :record, ["sub_x"])
+    :erpc.call(a, Heartbeats.CallbackStats, :record, ["sub_y"])
+
+    wait_until(fn ->
+      Enum.all?([b, c], fn n ->
+        :erpc.call(n, Heartbeats.CallbackStats, :all, []) == %{"sub_x" => 2, "sub_y" => 1}
+      end)
+    end)
+
+    assert :erpc.call(a, Heartbeats.CallbackStats, :all, []) == %{"sub_x" => 2, "sub_y" => 1}
+  end
+
   test "graceful shutdown drains workers off the leaving node" do
     [a, b, c] = start_cluster(3)
     register_subs_on(a, 30)

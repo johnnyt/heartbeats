@@ -30,6 +30,11 @@ defmodule Heartbeats.Subscription do
     }
   end
 
+  @spec generate_id() :: String.t()
+  def generate_id do
+    UXID.generate!(prefix: "sub", size: :small)
+  end
+
   defp atomize(attrs) do
     Map.new(attrs, fn
       {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
@@ -51,10 +56,6 @@ defmodule Heartbeats.Subscription do
   defp validate_interval!(ms) do
     raise ArgumentError,
           "interval_ms must be an integer >= #{@min_interval_ms}, got: #{inspect(ms)}"
-  end
-
-  defp generate_id do
-    UXID.generate!(prefix: "sub")
   end
 
   defp generate_verifier do

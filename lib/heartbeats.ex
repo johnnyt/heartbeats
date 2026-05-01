@@ -56,9 +56,15 @@ defmodule Heartbeats do
   """
   @spec register_many(pos_integer(), map()) :: [Subscription.t()]
   def register_many(count, attrs \\ %{}) when is_integer(count) and count > 0 do
-    for i <- 1..count do
+    for _i <- 1..count do
+      # Pre-generate the id so we can put it in the callback URL path —
+      # otherwise stats keyed by the URL segment wouldn't match `sub.id`
+      # in the dashboard.
+      id = Subscription.generate_id()
+
       base = %{
-        callback_url: "http://localhost:4100/api/callbacks/demo_#{i}",
+        id: id,
+        callback_url: "http://localhost:4100/api/callbacks/#{id}",
         interval_ms: 5_000
       }
 

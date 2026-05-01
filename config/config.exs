@@ -14,6 +14,11 @@ config :heartbeats,
 config :libring,
   rings: [heartbeats: [monitor_nodes: true, node_type: :visible]]
 
+# Subscription IDs use UXID with the small size + compact_time encoding for
+# 8-character random suffixes (vs. 10) — keeps the dashboard column tight
+# while staying K-sortable until ~September 2039.
+config :uxid, compact_time: true
+
 # Configure the endpoint
 config :heartbeats, HeartbeatsWeb.Endpoint,
   url: [host: "localhost"],

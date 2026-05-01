@@ -25,10 +25,11 @@ defmodule HeartbeatsTest do
     callback_urls = Enum.map(subs, & &1.callback_url)
     assert Enum.uniq(callback_urls) == callback_urls
 
-    assert Enum.all?(
-             callback_urls,
-             &String.starts_with?(&1, "http://localhost:4100/api/callbacks/")
-           )
+    # Each subscription's URL path must end with its own id so stats
+    # recorded by the callback controller match the dashboard's lookup key.
+    for sub <- subs do
+      assert String.ends_with?(sub.callback_url, "/api/callbacks/#{sub.id}")
+    end
 
     assert Heartbeats.Subscriptions.count() == 5
   end

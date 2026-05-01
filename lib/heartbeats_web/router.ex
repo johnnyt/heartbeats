@@ -17,7 +17,7 @@ defmodule HeartbeatsWeb.Router do
   scope "/", HeartbeatsWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", ClusterLive, :index
   end
 
   scope "/api", HeartbeatsWeb do

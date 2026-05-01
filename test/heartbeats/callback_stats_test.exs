@@ -34,4 +34,27 @@ defmodule Heartbeats.CallbackStatsTest do
 
     assert CallbackStats.all() == %{"sub_x" => 2, "sub_y" => 1}
   end
+
+  test "an inbound :increment from a peer node updates the local counter" do
+    Phoenix.PubSub.broadcast(
+      Heartbeats.PubSub,
+      "callbacks_replica",
+      {:increment, "sub_remote", :peer@somewhere}
+    )
+
+    Process.sleep(50)
+    assert CallbackStats.count("sub_remote") == 1
+  end
+
+  test "an inbound :increment that originated on this node is ignored" do
+    Phoenix.PubSub.broadcast(
+      Heartbeats.PubSub,
+      "callbacks_replica",
+      {:increment, "sub_self", node()}
+    )
+
+    Process.sleep(50)
+    # No double-counting — the originator already incremented before broadcasting.
+    assert CallbackStats.count("sub_self") == 0
+  end
 end
