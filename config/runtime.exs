@@ -21,7 +21,7 @@ if System.get_env("PHX_SERVER") do
 end
 
 config :heartbeats, HeartbeatsWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "5000"))]
+  http: [port: String.to_integer(System.get_env("PORT", "4100"))]
 
 if env = System.get_env("HEARTBEATS_CLUSTERING") do
   config :heartbeats, clustering_enabled: env in ~w(1 true yes on)

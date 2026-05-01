@@ -16,6 +16,7 @@ defmodule Heartbeats.Application do
         [
           {Registry, keys: :unique, name: Heartbeats.Registry},
           Heartbeats.Subscriptions,
+          Heartbeats.CallbackStats,
           Heartbeats.WorkerSupervisor,
           Heartbeats.Placement,
           HeartbeatsWeb.Endpoint,

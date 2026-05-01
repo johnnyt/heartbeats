@@ -27,7 +27,7 @@ defmodule HeartbeatsTest do
 
     assert Enum.all?(
              callback_urls,
-             &String.starts_with?(&1, "http://localhost:5000/api/callbacks/")
+             &String.starts_with?(&1, "http://localhost:4100/api/callbacks/")
            )
 
     assert Heartbeats.Subscriptions.count() == 5

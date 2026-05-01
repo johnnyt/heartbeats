@@ -20,7 +20,7 @@ defmodule Heartbeats do
   ## Examples
 
       iex> {:ok, sub} = Heartbeats.register(%{
-      ...>   callback_url: "http://localhost:5000/api/callbacks/demo",
+      ...>   callback_url: "http://localhost:4100/api/callbacks/demo",
       ...>   interval_ms: 2_000
       ...> })
   """
@@ -40,7 +40,7 @@ defmodule Heartbeats do
   and manual verification.
 
   Each subscription gets a unique callback URL of the form
-  `http://localhost:5000/api/callbacks/demo_<i>`. Override defaults by passing
+  `http://localhost:4100/api/callbacks/demo_<i>`. Override defaults by passing
   `attrs` (e.g. `%{interval_ms: 2_000}` for faster heartbeats).
 
   Returns the list of registered subscriptions.
@@ -58,7 +58,7 @@ defmodule Heartbeats do
   def register_many(count, attrs \\ %{}) when is_integer(count) and count > 0 do
     for i <- 1..count do
       base = %{
-        callback_url: "http://localhost:5000/api/callbacks/demo_#{i}",
+        callback_url: "http://localhost:4100/api/callbacks/demo_#{i}",
         interval_ms: 5_000
       }
 

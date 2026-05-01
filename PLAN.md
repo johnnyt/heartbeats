@@ -95,7 +95,7 @@ configured; `libcluster` + `libring` + `req` are pulled in but not yet wired.
 
 ### Manual verification
 
-- [x] `iex --name a@127.0.0.1 -S mix phx.server` boots cleanly; `localhost:5000` shows the Phoenix welcome page.
+- [x] `iex --name a@127.0.0.1 -S mix phx.server` boots cleanly; `localhost:4100` shows the Phoenix welcome page.
 - [x] `iex --name a@127.0.0.1 -S mix` followed by `Node.list()` returns `[]` without crashing (LocalEpmd strategy active, no peers yet).
 - [x] Without `--name`: `iex -S mix` does **not** start the cluster supervisor (verify by checking `:supervisor.which_children(Heartbeats.Supervisor)` — no `Cluster.Supervisor` child).
 - [x] `Heartbeats.Ring` not yet present (we'll add it next phase) — confirm by `Code.ensure_loaded?(Heartbeats.Ring)` returning `false`.
@@ -168,15 +168,15 @@ In three terminals, all three nodes should converge on the same picture.
 # T1
 iex --name a@127.0.0.1 -S mix phx.server
 # T2
-PORT=5001 iex --name b@127.0.0.1 -S mix phx.server
+PORT=4101 iex --name b@127.0.0.1 -S mix phx.server
 # T3
-PORT=5002 iex --name c@127.0.0.1 -S mix phx.server
+PORT=4102 iex --name c@127.0.0.1 -S mix phx.server
 ```
 
 - [x] On `a`, `Node.list()` returns `[:b@127.0.0.1, :c@127.0.0.1]`.
-- [x] On `a`, register 30 subscriptions pointing at `http://localhost:5000/callbacks/<id>`:
+- [x] On `a`, register 30 subscriptions pointing at `http://localhost:4100/callbacks/<id>`:
   ```elixir
-  for i <- 1..30, do: Heartbeats.register(%{callback_url: "http://localhost:5000/callbacks/sub#{i}", interval_ms: 5_000})
+  for i <- 1..30, do: Heartbeats.register(%{callback_url: "http://localhost:4100/callbacks/sub#{i}", interval_ms: 5_000})
   ```
 - [x] On every node, `Heartbeats.Subscriptions.count()` returns `30` (replication works).
 - [x] On every node, `Registry.count(Heartbeats.Registry)` is roughly `10` (±a few — consistent hashing, not perfectly even). Sum across nodes = 30.
@@ -272,18 +272,18 @@ can count them.
 
 ### Automatic verification
 
-- [ ] `mix quality` passes.
-- [ ] `mix test` passes. Controller tests cover happy path + 4xx for malformed input.
-- [ ] End-to-end test: `POST /api/subscriptions` with `interval_ms: 500` → wait 1.5s → `GET /api/subscriptions` shows it → callback counter for that id ≥ 2.
+- [x] `mix quality` passes.
+- [x] `mix test` passes. Controller tests cover happy path + 4xx for malformed input.
+- [x] End-to-end test: `POST /api/subscriptions` with `interval_ms: 500` → wait 1.5s → `GET /api/subscriptions` shows it → callback counter for that id ≥ 2.
 
 ### Manual verification
 
-- [ ] `curl -XPOST localhost:5000/api/subscriptions -H 'content-type: application/json' -d '{"callback_url":"http://localhost:5000/api/callbacks/demo1","interval_ms":2000}'` returns 201 with an `owner_node`.
-- [ ] `curl localhost:5000/api/subscriptions` lists it.
-- [ ] In the Phoenix log on the owner node, observe a heartbeat POST every ~1.8s (90% of 2000).
-- [ ] In the Phoenix log on the receiver node (whichever has port 5000), observe `CallbackController.receive` being hit.
-- [ ] `curl -XDELETE localhost:5000/api/subscriptions/demo1` returns 204; heartbeats stop.
-- [ ] Register a subscription on node `a` (port 5000), but its ring owner is node `c` (port 5002). Confirm `c`'s log shows the heartbeat POSTs while `a`'s log doesn't.
+- [x] `curl -XPOST localhost:4100/api/subscriptions -H 'content-type: application/json' -d '{"callback_url":"http://localhost:4100/api/callbacks/demo1","interval_ms":2000}'` returns 201 with an `owner_node`.
+- [x] `curl localhost:4100/api/subscriptions` lists it.
+- [x] In the Phoenix log on the owner node, observe a heartbeat POST every ~1.8s (90% of 2000).
+- [x] In the Phoenix log on the receiver node (whichever has port 4100), observe `CallbackController.receive` being hit.
+- [x] `curl -XDELETE localhost:4100/api/subscriptions/demo1` returns 204; heartbeats stop.
+- [x] Register a subscription on node `a` (port 4100), but its ring owner is node `c` (port 4102). Confirm `c`'s log shows the heartbeat POSTs while `a`'s log doesn't.
 
 🛑 **PAUSE — wait for confirmation that manual verification passed before starting Phase 5.**
 
@@ -320,7 +320,7 @@ is the part that sells the demo.
 
 ### Manual verification
 
-- [ ] Open `localhost:5000`, `:5001`, `:5002` in three browser tabs.
+- [ ] Open `localhost:4100`, `:4101`, `:4102` in three browser tabs.
 - [ ] All three show 3 nodes, 0 subscriptions.
 - [ ] Click "Spawn 100 subscriptions" on any tab. All three tabs update within ~1s to show ~33 workers per node.
 - [ ] Heartbeat counters climb visibly.

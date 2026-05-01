@@ -20,10 +20,15 @@ defmodule HeartbeatsWeb.Router do
     get "/", PageController, :home
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", HeartbeatsWeb do
-  #   pipe_through :api
-  # end
+  scope "/api", HeartbeatsWeb do
+    pipe_through :api
+
+    get "/subscriptions", SubscriptionController, :index
+    post "/subscriptions", SubscriptionController, :create
+    delete "/subscriptions/:id", SubscriptionController, :delete
+
+    post "/callbacks/:id", CallbackController, :receive_heartbeat
+  end
 
   # Enable LiveDashboard in development.
   if Application.compile_env(:heartbeats, :dev_routes) do
