@@ -7,8 +7,12 @@ config :heartbeats, HeartbeatsWeb.Endpoint,
   secret_key_base: "/c/yT4wDZU+/9E1CMZtjLmk0wvGBMeOoj8bbe6GnYEkP3h79cr3912YhQBmFKFdD",
   server: false
 
-# Print only warnings and errors during test
-config :logger, level: :warning
+# Print only errors during test (heartbeat workers log econnrefused noise
+# until Phase 4 wires up a real CallbackController).
+config :logger, level: :error
+
+# Keep the graceful-shutdown drain loop snappy in tests.
+config :heartbeats, :drain_timeout_ms, 200
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime

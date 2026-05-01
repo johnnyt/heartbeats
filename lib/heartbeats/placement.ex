@@ -9,12 +9,22 @@ defmodule Heartbeats.Placement do
     - Otherwise, RPCs the same `place/1` request to the owner via
       `GenServer.call({Placement, owner_node}, ...)`.
 
-  Auto-rebalancing on `:nodeup` / `:nodedown` lands in Phase 3.
+  Subscribes to `:net_kernel.monitor_nodes/1`. On any `:nodeup` or `:nodedown`,
+  schedules a debounced `do_rebalance_local/0` pass which iterates the
+  Subscriptions ETS, adopts subs the ring now assigns to us, and tells local
+  workers whose owner has changed to migrate themselves.
   """
 
   use GenServer
 
+  require Logger
+
   alias Heartbeats.{Ring, Subscription, Subscriptions, Worker, WorkerSupervisor}
+
+  # Coalesces a flurry of :nodeup/:nodedown events into a single rebalance
+  # pass, and gives libring's own monitor_nodes hook a moment to update the
+  # ring before we read from it.
+  @rebalance_debounce_ms 250
 
   ## Public API
 
@@ -86,7 +96,10 @@ defmodule Heartbeats.Placement do
   ## GenServer
 
   @impl true
-  def init(_opts), do: {:ok, %{}}
+  def init(_opts) do
+    :net_kernel.monitor_nodes(true, node_type: :visible)
+    {:ok, %{rebalance_timer: nil}}
+  end
 
   @impl true
   def handle_call({:place, %Subscription{} = sub}, _from, state) do
@@ -100,17 +113,76 @@ defmodule Heartbeats.Placement do
 
   @impl true
   def handle_cast(:rebalance_local, state) do
-    for sub <- Subscriptions.all() do
-      case Worker.whereis(sub.id) do
-        pid when is_pid(pid) -> send(pid, :rebalance)
-        nil -> :ok
-      end
-    end
-
+    do_rebalance_local()
     {:noreply, state}
   end
 
+  @impl true
+  def handle_info({:nodeup, _node, _opts}, state) do
+    {:noreply, schedule_rebalance(state)}
+  end
+
+  def handle_info({:nodedown, _node, _opts}, state) do
+    {:noreply, schedule_rebalance(state)}
+  end
+
+  def handle_info(:do_rebalance, state) do
+    do_rebalance_local()
+    {:noreply, %{state | rebalance_timer: nil}}
+  end
+
   ## Helpers
+
+  defp schedule_rebalance(%{rebalance_timer: timer} = state) do
+    if is_reference(timer), do: Process.cancel_timer(timer)
+    new_timer = Process.send_after(self(), :do_rebalance, @rebalance_debounce_ms)
+    %{state | rebalance_timer: new_timer}
+  end
+
+  defp do_rebalance_local do
+    {migrated_in, migrated_out} =
+      Enum.reduce(Subscriptions.all(), {0, 0}, &reconcile_subscription/2)
+
+    if migrated_in + migrated_out > 0 do
+      Logger.info("rebalance on #{node()}: adopted=#{migrated_in} migrated_off=#{migrated_out}")
+
+      :telemetry.execute(
+        [:heartbeats, :placement, :rebalanced],
+        %{adopted: migrated_in, migrated_off: migrated_out},
+        %{node: node()}
+      )
+    end
+
+    :ok
+  end
+
+  defp reconcile_subscription(sub, {in_count, out_count}) do
+    case {Ring.owner(sub.id), Worker.whereis(sub.id)} do
+      # Owner is us; no local worker yet → adopt.
+      {owner, nil} when owner == node() ->
+        {in_count + adopt_count(sub), out_count}
+
+      # Owner is us and worker is here; nothing to do.
+      {owner, pid} when owner == node() and is_pid(pid) ->
+        {in_count, out_count}
+
+      # Owner is someone else but worker is here → ask it to migrate.
+      {_other, pid} when is_pid(pid) ->
+        send(pid, :rebalance)
+        {in_count, out_count + 1}
+
+      # Owner is someone else and we have no worker; not our problem.
+      _other ->
+        {in_count, out_count}
+    end
+  end
+
+  defp adopt_count(sub) do
+    case WorkerSupervisor.start_worker(sub) do
+      {:ok, _pid} -> 1
+      _other -> 0
+    end
+  end
 
   defp stop_local_worker(subscription_id) do
     case Worker.whereis(subscription_id) do

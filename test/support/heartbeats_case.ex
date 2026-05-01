@@ -27,6 +27,7 @@ defmodule Heartbeats.Case do
   Useful for asserting on async cleanup (e.g. Registry monitors processing
   a process-down event after `DynamicSupervisor.terminate_child/2` returns).
   """
+  @spec wait_until((-> any()), pos_integer()) :: any()
   def wait_until(fun, timeout \\ 500) do
     deadline = System.monotonic_time(:millisecond) + timeout
     do_wait_until(fun, deadline)
@@ -48,8 +49,10 @@ defmodule Heartbeats.Case do
   @doc """
   Terminates every running worker and clears the subscriptions ETS table.
   """
+  @spec clear_state!() :: :ok
   def clear_state! do
-    for {_, pid, _, _} <- DynamicSupervisor.which_children(Heartbeats.WorkerSupervisor) do
+    for {_id, pid, _type, _modules} <-
+          DynamicSupervisor.which_children(Heartbeats.WorkerSupervisor) do
       DynamicSupervisor.terminate_child(Heartbeats.WorkerSupervisor, pid)
     end
 

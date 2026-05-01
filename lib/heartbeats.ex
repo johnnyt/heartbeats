@@ -31,7 +31,39 @@ defmodule Heartbeats do
 
     case Placement.place(sub) do
       {:ok, _pid} -> {:ok, sub}
-      {:error, _} = error -> error
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Registers `count` demo subscriptions in one shot, useful for `iex` sessions
+  and manual verification.
+
+  Each subscription gets a unique callback URL of the form
+  `http://localhost:5000/api/callbacks/demo_<i>`. Override defaults by passing
+  `attrs` (e.g. `%{interval_ms: 2_000}` for faster heartbeats).
+
+  Returns the list of registered subscriptions.
+
+  ## Examples
+
+      iex> subs = Heartbeats.register_many(30)
+      iex> length(subs)
+      30
+
+      # Faster cadence for a more visible demo:
+      iex> Heartbeats.register_many(50, %{interval_ms: 1_500})
+  """
+  @spec register_many(pos_integer(), map()) :: [Subscription.t()]
+  def register_many(count, attrs \\ %{}) when is_integer(count) and count > 0 do
+    for i <- 1..count do
+      base = %{
+        callback_url: "http://localhost:5000/api/callbacks/demo_#{i}",
+        interval_ms: 5_000
+      }
+
+      {:ok, sub} = register(Map.merge(base, attrs))
+      sub
     end
   end
 

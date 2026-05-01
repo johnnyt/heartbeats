@@ -15,6 +15,24 @@ defmodule HeartbeatsTest do
     assert is_pid(Worker.whereis(sub.id))
   end
 
+  test "register_many/2 registers N subscriptions with default callback URLs" do
+    subs = Heartbeats.register_many(5, %{interval_ms: 60_000})
+
+    assert length(subs) == 5
+    assert Enum.all?(subs, &String.starts_with?(&1.id, "sub_"))
+    assert Enum.uniq_by(subs, & &1.id) == subs
+
+    callback_urls = Enum.map(subs, & &1.callback_url)
+    assert Enum.uniq(callback_urls) == callback_urls
+
+    assert Enum.all?(
+             callback_urls,
+             &String.starts_with?(&1, "http://localhost:5000/api/callbacks/")
+           )
+
+    assert Heartbeats.Subscriptions.count() == 5
+  end
+
   test "list/0 returns all registered subscriptions" do
     {:ok, sub_a} =
       Heartbeats.register(%{

@@ -27,7 +27,7 @@ defmodule Heartbeats.Worker do
   @spec whereis(String.t()) :: pid() | nil
   def whereis(subscription_id) when is_binary(subscription_id) do
     case Registry.lookup(Heartbeats.Registry, {:worker, subscription_id}) do
-      [{pid, _}] -> pid
+      [{pid, _value}] -> pid
       [] -> nil
     end
   end

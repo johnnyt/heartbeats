@@ -161,7 +161,25 @@
           {Credo.Check.Warning.UnusedRegexOperation, []},
           {Credo.Check.Warning.UnusedStringOperation, []},
           {Credo.Check.Warning.UnusedTupleOperation, []},
-          {Credo.Check.Warning.WrongTestFilename, []}
+          {Credo.Check.Warning.WrongTestFilename, []},
+          {Credo.Check.Consistency.UnusedVariableNames, []},
+          # Scaffolded Phoenix UI helpers don't typically carry @specs and
+          # we haven't taken ownership of them yet; revisit in Phase 5+.
+          {Credo.Check.Readability.Specs,
+           [
+             files: %{
+               excluded: [
+                 ~r"lib/heartbeats_web\.ex$",
+                 ~r"lib/heartbeats_web/components/",
+                 ~r"lib/heartbeats_web/controllers/error_html\.ex$",
+                 ~r"lib/heartbeats_web/controllers/error_json\.ex$",
+                 ~r"lib/heartbeats_web/controllers/page_controller\.ex$",
+                 ~r"lib/heartbeats_web/controllers/page_html\.ex$",
+                 ~r"lib/heartbeats_web/gettext\.ex$",
+                 ~r"lib/heartbeats_web/telemetry\.ex$"
+               ]
+             }
+           ]}
         ],
         disabled: [
           #
@@ -173,7 +191,7 @@
           #   and be sure to use `mix credo --strict` to see low priority checks)
           #
           {Credo.Check.Consistency.MultiAliasImportRequireUse, []},
-          {Credo.Check.Consistency.UnusedVariableNames, []},
+          # {Credo.Check.Consistency.UnusedVariableNames, []},
           {Credo.Check.Design.DuplicatedCode, []},
           {Credo.Check.Design.SkipTestWithoutComment, []},
           {Credo.Check.Readability.AliasAs, []},
@@ -186,7 +204,7 @@
           {Credo.Check.Readability.SeparateAliasRequire, []},
           {Credo.Check.Readability.SingleFunctionToBlockPipe, []},
           {Credo.Check.Readability.SinglePipe, []},
-          {Credo.Check.Readability.Specs, []},
+          # {Credo.Check.Readability.Specs, []},
           {Credo.Check.Readability.StrictModuleLayout, []},
           {Credo.Check.Readability.WithCustomTaggedTuple, []},
           {Credo.Check.Refactor.ABCSize, []},

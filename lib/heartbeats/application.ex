@@ -18,7 +18,8 @@ defmodule Heartbeats.Application do
           Heartbeats.Subscriptions,
           Heartbeats.WorkerSupervisor,
           Heartbeats.Placement,
-          HeartbeatsWeb.Endpoint
+          HeartbeatsWeb.Endpoint,
+          Heartbeats.GracefulShutdown
         ]
 
     opts = [strategy: :one_for_one, name: Heartbeats.Supervisor]

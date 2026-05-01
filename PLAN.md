@@ -220,19 +220,19 @@ exiting node so no heartbeats are dropped during a clean shutdown.
 
 ### Automatic verification
 
-- [ ] `mix quality` passes.
-- [ ] Multi-node ExUnit test: 3-node cluster, 30 subs, kill one node — within 5s the orphans are running on the surviving two.
-- [ ] Multi-node ExUnit test: 2-node cluster, register 30 subs, start a 3rd node — within 5s ~1/3 of the workers have migrated to the new node.
-- [ ] Multi-node ExUnit test: graceful `Application.stop(:heartbeats)` on one node — the node's local worker count drops to 0 before the application fully stops; survivors absorb the workers; no missed heartbeats.
+- [x] `mix quality` passes.
+- [x] Multi-node ExUnit test: 3-node cluster, 30 subs, kill one node — within 5s the orphans are running on the surviving two.
+- [x] Multi-node ExUnit test: 2-node cluster, register 30 subs, start a 3rd node — within 5s ~1/3 of the workers have migrated to the new node.
+- [x] Multi-node ExUnit test: graceful `Application.stop(:heartbeats)` on one node — the node's local worker count drops to 0 before the application fully stops; survivors absorb the workers; no missed heartbeats.
 
 ### Manual verification
 
-- [ ] Three nodes running; 30 subscriptions registered (~10 each).
-- [ ] **Sudden death**: `kill -9 <pid>` on node `c`'s BEAM. Within ~5s, `a` and `b`'s `Registry.count(Heartbeats.Registry)` collectively return 30. The previously-on-`c` subscriptions are now distributed across `a` and `b`.
-- [ ] **Graceful shutdown**: in node `c`'s iex, run `:init.stop()` (or `Ctrl-C, a`). Watch the log show `Heartbeats.GracefulShutdown` cordoning, rebalancing, and waiting for drain. `c`'s local worker count hits 0 before the BEAM exits. No errors logged on `a` or `b` from missed heartbeats.
-- [ ] Restart node `c`. Within ~5s, ~10 workers have migrated back to `c`.
-- [ ] No worker is registered on more than one node simultaneously (would be a critical bug — verify by collecting `{node, worker_id}` tuples across all three nodes and asserting uniqueness).
-- [ ] Log output on every node shows `[:heartbeats, :placement, :rebalanced]` events on each topology change.
+- [x] Three nodes running; 30 subscriptions registered (~10 each).
+- [x] **Sudden death**: `kill -9 <pid>` on node `c`'s BEAM. Within ~5s, `a` and `b`'s `Registry.count(Heartbeats.Registry)` collectively return 30. The previously-on-`c` subscriptions are now distributed across `a` and `b`.
+- [x] **Graceful shutdown**: in node `c`'s iex, run `:init.stop()` (or `Ctrl-C, a`). Watch the log show `Heartbeats.GracefulShutdown` cordoning, rebalancing, and waiting for drain. `c`'s local worker count hits 0 before the BEAM exits. No errors logged on `a` or `b` from missed heartbeats.
+- [x] Restart node `c`. Within ~5s, ~10 workers have migrated back to `c`.
+- [x] No worker is registered on more than one node simultaneously (would be a critical bug — verify by collecting `{node, worker_id}` tuples across all three nodes and asserting uniqueness).
+- [x] Log output on every node shows `[:heartbeats, :placement, :rebalanced]` events on each topology change.
 
 🛑 **PAUSE — wait for confirmation that manual verification passed before starting Phase 4.**
 

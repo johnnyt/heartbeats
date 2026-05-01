@@ -42,7 +42,7 @@ defmodule Heartbeats.Subscription do
   defp fetch!(attrs, key) do
     case Map.fetch(attrs, key) do
       {:ok, value} when is_binary(value) and byte_size(value) > 0 -> value
-      _ -> raise ArgumentError, "missing required field: #{inspect(key)}"
+      _other -> raise ArgumentError, "missing required field: #{inspect(key)}"
     end
   end
 
