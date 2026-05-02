@@ -55,6 +55,25 @@ defmodule Heartbeats.Subscriptions do
   @spec count() :: non_neg_integer()
   def count, do: :ets.info(@table, :size)
 
+  @doc """
+  Stops every locally-running worker and clears this node's ETS table.
+
+  Used by `Heartbeats.clear_all/0` to robustly purge state across the cluster
+  without relying on PubSub-driven replication (which can leave orphaned
+  workers if any broadcast was missed).
+  """
+  @spec purge_local() :: :ok
+  def purge_local do
+    for {_id, pid, _type, _modules} <-
+          DynamicSupervisor.which_children(Heartbeats.WorkerSupervisor),
+        is_pid(pid) do
+      DynamicSupervisor.terminate_child(Heartbeats.WorkerSupervisor, pid)
+    end
+
+    :ets.delete_all_objects(@table)
+    :ok
+  end
+
   ## GenServer
 
   @impl true

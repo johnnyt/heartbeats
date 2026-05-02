@@ -84,6 +84,22 @@ defmodule Heartbeats do
   @spec list() :: [Subscription.t()]
   def list, do: Subscriptions.all()
 
+  @doc """
+  Cluster-wide reset: stops every worker on every node, clears every node's
+  Subscriptions ETS, and resets every node's CallbackStats counter.
+
+  More robust than iterating `list/0` and calling `unregister/1` because it
+  doesn't depend on the local Subscriptions ETS being in perfect sync —
+  any orphaned workers (e.g. from a flaky rolling deploy) get terminated too.
+  """
+  @spec clear_all() :: :ok
+  def clear_all do
+    nodes = [Node.self() | Node.list()]
+    :erpc.multicall(nodes, Heartbeats.Subscriptions, :purge_local, [], 5_000)
+    :erpc.multicall(nodes, Heartbeats.CallbackStats, :reset, [], 5_000)
+    :ok
+  end
+
   @doc "Removes `node` from the ring on every member; workers there will rebalance off."
   @spec cordon(node()) :: :ok
   def cordon(node \\ Node.self()), do: Ring.cordon(node)

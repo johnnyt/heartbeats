@@ -95,6 +95,30 @@ defmodule Heartbeats.ClusterTest do
     assert :erpc.call(a, Heartbeats.CallbackStats, :all, []) == %{"sub_x" => 2, "sub_y" => 1}
   end
 
+  @tag timeout: 60_000
+  test "rolling deploy preserves total worker count throughout" do
+    [a, b, c] = start_cluster(3)
+    register_subs_on(a, 30)
+
+    wait_until(fn -> total_workers([a, b, c]) == 30 end)
+
+    # Subscribe to deploy events on a peer so we can observe the lifecycle.
+    :erpc.call(a, Phoenix.PubSub, :subscribe, [Heartbeats.PubSub, "deploy"])
+
+    :ok = :erpc.call(a, Heartbeats.RollingDeploy, :begin, [])
+
+    # 3 nodes × (~2.5s cordoned pause + ~2.5s uncordoned pause + drain) ≈ 18s.
+    wait_until(
+      fn ->
+        :erpc.call(a, Heartbeats.RollingDeploy, :status, []) == :idle and
+          total_workers([a, b, c]) == 30
+      end,
+      30_000
+    )
+
+    assert total_workers([a, b, c]) == 30
+  end
+
   test "graceful shutdown drains workers off the leaving node" do
     [a, b, c] = start_cluster(3)
     register_subs_on(a, 30)

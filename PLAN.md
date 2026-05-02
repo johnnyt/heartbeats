@@ -315,17 +315,17 @@ is the part that sells the demo.
 
 ### Automatic verification
 
-- [ ] `mix quality` passes.
-- [ ] `mix test` — at least one `Phoenix.LiveViewTest` that mounts `ClusterLive`, registers a subscription via the public API, and asserts it appears in the rendered HTML.
+- [x] `mix quality` passes.
+- [x] `mix test` — at least one `Phoenix.LiveViewTest` that mounts `ClusterLive`, registers a subscription via the public API, and asserts it appears in the rendered HTML.
 
 ### Manual verification
 
-- [ ] Open `localhost:4100`, `:4101`, `:4102` in three browser tabs.
-- [ ] All three show 3 nodes, 0 subscriptions.
-- [ ] Click "Spawn 100 subscriptions" on any tab. All three tabs update within ~1s to show ~33 workers per node.
-- [ ] Heartbeat counters climb visibly.
-- [ ] Kill node `c` (`Ctrl-C, a` in its terminal). Within ~5s, the other two tabs show `c` as `:down`, its workers redistributed.
-- [ ] Restart `c`. Tabs show it returning, workers migrating back.
+- [x] Open `localhost:4100`, `:4101`, `:4102` in three browser tabs.
+- [x] All three show 3 nodes, 0 subscriptions.
+- [x] Click "Spawn 100 subscriptions" on any tab. All three tabs update within ~1s to show ~33 workers per node.
+- [x] Heartbeat counters climb visibly.
+- [x] Kill node `c` (`Ctrl-C, a` in its terminal). Within ~5s, the other two tabs show `c` as `:down`, its workers redistributed.
+- [x] Restart `c`. Tabs show it returning, workers migrating back.
 
 🛑 **PAUSE — wait for confirmation that manual verification passed before starting Phase 6.**
 
@@ -361,17 +361,17 @@ self-healing behavior without touching a terminal.
 
 ### Automatic verification
 
-- [ ] `mix quality` passes.
-- [ ] `mix test` — ExUnit test for `Chaos.random_kill/0` on a 2-node test cluster: assert workers transiently disappear and come back.
-- [ ] `mix test` — ExUnit test for `RollingDeploy.start/0` on a 3-node test cluster: assert each node is cordoned exactly once, drained, then uncordoned, in sequence; total workers preserved throughout (modulo the brief restart window).
+- [x] `mix quality` passes.
+- [x] `mix test` — ExUnit test for `Chaos.random_kill/0` on a 2-node test cluster: assert workers transiently disappear and come back.
+- [x] `mix test` — ExUnit test for `RollingDeploy.start/0` on a 3-node test cluster: assert each node is cordoned exactly once, drained, then uncordoned, in sequence; total workers preserved throughout (modulo the brief restart window).
 
 ### Manual verification
 
-- [ ] Run the 3-node setup; spawn 100 subs; click **Inject Chaos**. One node's workers flicker; counts return to ~33 within seconds. No subscriptions lost.
-- [ ] Click **Rolling Deploy**. Watch each node in turn: its worker count drops to 0 (workers migrate to the other two), holds for the configured pause, then returns to ~33 as the next node starts draining. Dashboard pill cycles through `:cordoned` → `:draining` → `:live`.
-- [ ] Total worker count across all live nodes stays at 100 throughout the rolling deploy (no dropped subscriptions).
-- [ ] Heartbeats received counter on the dashboard keeps climbing throughout — no perceptible gap, demonstrating zero-downtime.
-- [ ] Click **Rolling Deploy** twice quickly: second click is a no-op (or shows a flash like "already in progress").
+- [x] Run the 3-node setup; spawn 100 subs; click **Inject Chaos**. One node's workers flicker; counts return to ~33 within seconds. No subscriptions lost.
+- [x] Click **Rolling Deploy**. Watch each node in turn: its worker count drops to 0 (workers migrate to the other two), holds for the configured pause, then returns to ~33 as the next node starts draining. Dashboard pill cycles through `:cordoned` → `:draining` → `:live`.
+- [x] Total worker count across all live nodes stays at 100 throughout the rolling deploy (no dropped subscriptions).
+- [x] Heartbeats received counter on the dashboard keeps climbing throughout — no perceptible gap, demonstrating zero-downtime.
+- [x] Click **Rolling Deploy** twice quickly: second click is a no-op (or shows a flash like "already in progress").
 
 🛑 **PAUSE — wait for confirmation that manual verification passed before starting Phase 7.**
 

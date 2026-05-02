@@ -3,6 +3,25 @@ defmodule HeartbeatsTest do
 
   alias Heartbeats.{Subscriptions, Worker}
 
+  test "clear_all/0 stops every worker and empties Subscriptions" do
+    Heartbeats.register_many(5, %{interval_ms: 60_000})
+    assert Subscriptions.count() == 5
+
+    initial_pids =
+      Heartbeats.list() |> Enum.map(& &1.id) |> Enum.map(&Worker.whereis/1)
+
+    assert Enum.all?(initial_pids, &is_pid/1)
+
+    Heartbeats.clear_all()
+
+    assert Subscriptions.count() == 0
+
+    # Every worker pid should be dead.
+    for pid <- initial_pids do
+      refute Process.alive?(pid)
+    end
+  end
+
   test "register/1 stores the subscription and starts a worker on the owner node" do
     {:ok, sub} =
       Heartbeats.register(%{

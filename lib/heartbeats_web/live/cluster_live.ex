@@ -23,7 +23,7 @@ defmodule HeartbeatsWeb.ClusterLive do
 
   use HeartbeatsWeb, :live_view
 
-  alias Heartbeats.{CallbackStats, Placement, Ring}
+  alias Heartbeats.{CallbackStats, Chaos, Placement, Ring, RollingDeploy}
 
   @refresh_ms 1_000
   @rpc_timeout_ms 500
@@ -34,12 +34,16 @@ defmodule HeartbeatsWeb.ClusterLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "subscriptions")
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "callbacks")
+      Phoenix.PubSub.subscribe(Heartbeats.PubSub, "deploy")
+      Phoenix.PubSub.subscribe(Heartbeats.PubSub, "chaos")
       Process.send_after(self(), :tick, @refresh_ms)
     end
 
     {:ok,
      socket
      |> assign(:max_spawn, @max_spawn)
+     |> assign(:deploy_state, :idle)
+     |> assign(:chaos_state, :idle)
      |> refresh_state()}
   end
 
@@ -56,6 +60,72 @@ defmodule HeartbeatsWeb.ClusterLive do
     # Bump the cluster-wide counter cheaply; the next :tick will reconcile
     # exact numbers from CallbackStats.
     {:noreply, update(socket, :total_callbacks, &(&1 + 1))}
+  end
+
+  ## Rolling deploy lifecycle
+
+  def handle_info({:deploy, {:start, total}}, socket) do
+    {:noreply,
+     assign(socket, :deploy_state, %{
+       phase: :starting,
+       current: nil,
+       message: "Starting rolling deploy across #{total} nodes…"
+     })}
+  end
+
+  def handle_info({:deploy, {:cordon, node}}, socket) do
+    {:noreply,
+     assign(socket, :deploy_state, %{
+       phase: :cordoning,
+       current: node,
+       message: "Cordoning #{node}…"
+     })}
+  end
+
+  def handle_info({:deploy, {:draining, node, remaining}}, socket) do
+    {:noreply,
+     assign(socket, :deploy_state, %{
+       phase: :draining,
+       current: node,
+       message: "Draining #{node} (#{remaining} workers remaining)…"
+     })}
+  end
+
+  def handle_info({:deploy, {:uncordon, node}}, socket) do
+    {:noreply,
+     assign(socket, :deploy_state, %{
+       phase: :uncordoning,
+       current: node,
+       message: "Uncordoning #{node}…"
+     })}
+  end
+
+  def handle_info({:deploy, :complete}, socket) do
+    {:noreply,
+     socket
+     |> assign(:deploy_state, :idle)
+     |> put_flash(:info, "Rolling deploy complete")
+     |> refresh_state()}
+  end
+
+  def handle_info({:deploy, {:error, reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:deploy_state, :idle)
+     |> put_flash(:error, "Rolling deploy failed: #{inspect(reason)}")}
+  end
+
+  ## Chaos events
+
+  def handle_info({:chaos, :killed, node, count}, socket) do
+    {:noreply, assign(socket, :chaos_state, %{node: node, count: count})}
+  end
+
+  def handle_info({:chaos, :recovered, node}, socket) do
+    case socket.assigns.chaos_state do
+      %{node: ^node} -> {:noreply, assign(socket, :chaos_state, :idle)}
+      _other -> {:noreply, socket}
+    end
   end
 
   @impl true
@@ -76,13 +146,35 @@ defmodule HeartbeatsWeb.ClusterLive do
   end
 
   def handle_event("clear_all", _params, socket) do
-    for sub <- Heartbeats.list(), do: Heartbeats.unregister(sub.id)
-    CallbackStats.reset()
+    Heartbeats.clear_all()
 
     {:noreply,
      socket
-     |> put_flash(:info, "Cleared all subscriptions")
+     |> put_flash(:info, "Cleared all subscriptions across the cluster")
      |> refresh_state()}
+  end
+
+  def handle_event("inject_chaos", _params, socket) do
+    case Chaos.random_kill() do
+      {:ok, %{node: node, killed: killed}} ->
+        {:noreply, put_flash(socket, :info, "Killed #{killed} workers on #{node}")}
+
+      {:error, :no_nodes} ->
+        {:noreply, put_flash(socket, :error, "No nodes in the ring to chaos")}
+    end
+  end
+
+  def handle_event("rolling_deploy", _params, socket) do
+    case RollingDeploy.begin() do
+      :ok ->
+        {:noreply, put_flash(socket, :info, "Rolling deploy started")}
+
+      {:error, :already_running} ->
+        {:noreply, put_flash(socket, :error, "Rolling deploy already in progress")}
+
+      {:error, :no_nodes} ->
+        {:noreply, put_flash(socket, :error, "No nodes in the ring to deploy")}
+    end
   end
 
   ## Rendering
@@ -98,6 +190,22 @@ defmodule HeartbeatsWeb.ClusterLive do
           callbacks received
         </div>
       </header>
+
+      <%= if @deploy_state != :idle do %>
+        <div class="alert alert-info">
+          <span class="loading loading-spinner loading-sm"></span>
+          <span>{@deploy_state.message}</span>
+        </div>
+      <% end %>
+
+      <%= if @chaos_state != :idle do %>
+        <div class="alert alert-error">
+          <span class="loading loading-spinner loading-sm"></span>
+          <span>
+            Chaos on <span class="font-mono">{@chaos_state.node}</span>: killed {@chaos_state.count} workers — recovering…
+          </span>
+        </div>
+      <% end %>
 
       <section>
         <h2 class="text-xl font-semibold mb-2">Nodes</h2>
@@ -131,7 +239,7 @@ defmodule HeartbeatsWeb.ClusterLive do
         </div>
       </section>
 
-      <section class="grid md:grid-cols-2 gap-4">
+      <section class="grid md:grid-cols-3 gap-4">
         <form phx-submit="spawn" class="card bg-base-200 p-4 space-y-3">
           <h3 class="font-semibold">Spawn subscriptions</h3>
           <%!-- phx-update="ignore" prevents LiveView's diff from overwriting
@@ -168,10 +276,33 @@ defmodule HeartbeatsWeb.ClusterLive do
         </form>
 
         <div class="card bg-base-200 p-4 space-y-3">
+          <h3 class="font-semibold">Demo controls</h3>
+          <div class="flex gap-2">
+            <button
+              phx-click="inject_chaos"
+              disabled={@chaos_state != :idle}
+              class="btn btn-error btn-sm"
+            >
+              Inject Chaos
+            </button>
+            <button
+              phx-click="rolling_deploy"
+              disabled={@deploy_state != :idle}
+              class="btn btn-accent btn-sm"
+            >
+              Rolling Deploy
+            </button>
+          </div>
+          <p class="text-xs text-base-content/60">
+            <strong>Chaos</strong>: kills every worker on a random node (they restart locally). <strong>Rolling Deploy</strong>: cordon → drain → uncordon, one node at a time.
+          </p>
+        </div>
+
+        <div class="card bg-base-200 p-4 space-y-3">
           <h3 class="font-semibold">Reset</h3>
           <button
             phx-click="clear_all"
-            class="btn btn-warning"
+            class="btn btn-warning btn-sm"
             data-confirm="Unregister every subscription?"
           >
             Clear all subscriptions

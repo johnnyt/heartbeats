@@ -19,6 +19,7 @@ defmodule Heartbeats.Application do
           Heartbeats.CallbackStats,
           Heartbeats.WorkerSupervisor,
           Heartbeats.Placement,
+          Heartbeats.RollingDeploy,
           HeartbeatsWeb.Endpoint,
           Heartbeats.GracefulShutdown
         ]
