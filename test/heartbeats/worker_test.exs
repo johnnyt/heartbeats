@@ -1,15 +1,7 @@
 defmodule Heartbeats.WorkerTest do
   use Heartbeats.Case
 
-  alias Heartbeats.{Subscription, Subscriptions, Worker, WorkerSupervisor}
-
-  defp build_sub(overrides \\ %{}) do
-    Map.merge(
-      %{callback_url: "http://localhost:65535/no-listener", interval_ms: 60_000},
-      overrides
-    )
-    |> Subscription.new()
-  end
+  alias Heartbeats.{Worker, WorkerSupervisor}
 
   test "via_tuple/1 builds a Registry-backed name" do
     assert {:via, Registry, {Heartbeats.Registry, {:worker, "sub_abc"}}} =
@@ -22,7 +14,6 @@ defmodule Heartbeats.WorkerTest do
 
   test ":rebalance is a no-op when this node is still the owner" do
     sub = build_sub()
-    Subscriptions.put(sub)
     {:ok, pid} = WorkerSupervisor.start_worker(sub)
 
     send(pid, :rebalance)
@@ -35,7 +26,6 @@ defmodule Heartbeats.WorkerTest do
 
   test ":rebalance with an empty ring keeps the worker in place" do
     sub = build_sub()
-    Subscriptions.put(sub)
     {:ok, pid} = WorkerSupervisor.start_worker(sub)
 
     Heartbeats.Ring.cordon(node())

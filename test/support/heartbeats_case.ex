@@ -1,10 +1,12 @@
 defmodule Heartbeats.Case do
   @moduledoc """
-  ExUnit case template for tests that exercise the live `Subscriptions` /
-  `Placement` / `WorkerSupervisor` singletons.
+  ExUnit case template for tests that exercise the live `Placement` /
+  `WorkerSupervisor` singletons against the shared Postgres-backed
+  `Subscriptions` context.
 
-  Tests using this case run with `async: false` and clean up workers and
-  subscription state in `setup`.
+  Each test runs with the Ecto SQL sandbox in shared mode (so the running
+  Worker/Placement processes can see writes from the test process and
+  vice versa). Workers and DB rows are torn down in `setup`.
   """
 
   use ExUnit.CaseTemplate
@@ -12,13 +14,35 @@ defmodule Heartbeats.Case do
   using do
     quote do
       import Heartbeats.Case
+
+      alias Heartbeats.Repo
     end
   end
 
-  setup do
+  setup tags do
+    Heartbeats.DataCase.setup_sandbox(tags)
     clear_state!()
     on_exit(&clear_state!/0)
     :ok
+  end
+
+  @doc """
+  Builds an unpersisted `%Heartbeats.Subscription{}` struct with sensible
+  test defaults. Use this for `Worker` / `Placement` tests that don't need
+  the row in the DB. For DB-backed tests, use `Heartbeats.register/1` or
+  `Subscriptions.put/1` directly.
+  """
+  @spec build_sub(map()) :: Heartbeats.Subscription.t()
+  def build_sub(overrides \\ %{}) do
+    defaults = %{
+      id: Heartbeats.Subscription.generate_id(),
+      callback_url: "http://localhost:65535/no-listener",
+      interval_ms: 60_000,
+      verifier: "verifier-#{System.unique_integer([:positive])}",
+      callbacks_count: 0
+    }
+
+    struct!(Heartbeats.Subscription, Map.merge(defaults, overrides))
   end
 
   @doc """
@@ -47,7 +71,8 @@ defmodule Heartbeats.Case do
   end
 
   @doc """
-  Terminates every running worker and clears the subscriptions ETS table.
+  Terminates every running worker and deletes every subscription row from
+  the test DB.
   """
   @spec clear_state!() :: :ok
   def clear_state! do
@@ -56,9 +81,7 @@ defmodule Heartbeats.Case do
       DynamicSupervisor.terminate_child(Heartbeats.WorkerSupervisor, pid)
     end
 
-    for sub <- Heartbeats.Subscriptions.all() do
-      Heartbeats.Subscriptions.delete(sub.id)
-    end
+    Heartbeats.Repo.delete_all(Heartbeats.Subscription)
 
     :ok
   end

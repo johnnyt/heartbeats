@@ -5,17 +5,17 @@ defmodule Heartbeats do
   The flow when registering a subscription:
 
       Heartbeats.register/1
-        → Subscriptions.put/1   (writes ETS + broadcasts replication)
+        → Subscriptions.put/1   (Repo.insert + PubSub broadcast)
         → Placement.place/1     (consults Ring, starts/RPCs to owner)
         → WorkerSupervisor.start_worker/1 (DynamicSupervisor on owner node)
         → Worker GenServer      (HTTP heartbeats every ~interval_ms × 0.9)
   """
 
-  alias Heartbeats.{Placement, Ring, Subscription, Subscriptions}
+  alias Heartbeats.{Placement, Repo, Ring, Subscription, Subscriptions}
 
   @doc """
-  Registers a new subscription, replicates it across the cluster, and starts
-  its heartbeat worker on the ring-determined owner node.
+  Registers a new subscription in the shared DB and starts its heartbeat
+  worker on the ring-determined owner node.
 
   ## Examples
 
@@ -26,12 +26,15 @@ defmodule Heartbeats do
   """
   @spec register(map()) :: {:ok, Subscription.t()} | {:error, term()}
   def register(attrs) do
-    sub = Subscription.new(attrs)
-    :ok = Subscriptions.put(sub)
+    case Subscriptions.put(attrs) do
+      {:ok, %Subscription{} = sub} ->
+        case Placement.place(sub) do
+          {:ok, _pid} -> {:ok, sub}
+          {:error, _reason} = error -> error
+        end
 
-    case Placement.place(sub) do
-      {:ok, _pid} -> {:ok, sub}
-      {:error, _reason} = error -> error
+      {:error, _changeset} = error ->
+        error
     end
   end
 
@@ -40,8 +43,8 @@ defmodule Heartbeats do
   and manual verification.
 
   Each subscription gets a unique callback URL of the form
-  `http://localhost:4100/api/callbacks/demo_<i>`. Override defaults by passing
-  `attrs` (e.g. `%{interval_ms: 2_000}` for faster heartbeats).
+  `http://localhost:4100/api/callbacks/<sub_id>`. Override defaults by
+  passing `attrs` (e.g. `%{interval_ms: 2_000}` for faster heartbeats).
 
   Returns the list of registered subscriptions.
 
@@ -57,9 +60,9 @@ defmodule Heartbeats do
   @spec register_many(pos_integer(), map()) :: [Subscription.t()]
   def register_many(count, attrs \\ %{}) when is_integer(count) and count > 0 do
     for _i <- 1..count do
-      # Pre-generate the id so we can put it in the callback URL path —
-      # otherwise stats keyed by the URL segment wouldn't match `sub.id`
-      # in the dashboard.
+      # Pre-generate the id so we can embed it in the callback URL path —
+      # the controller increments `callbacks_count` for the row matching
+      # the path segment, so it must equal `sub.id`.
       id = Subscription.generate_id()
 
       base = %{
@@ -80,23 +83,23 @@ defmodule Heartbeats do
     Subscriptions.delete(id)
   end
 
-  @doc "Returns every subscription known to the cluster."
+  @doc "Returns every subscription in the shared DB."
   @spec list() :: [Subscription.t()]
   def list, do: Subscriptions.all()
 
   @doc """
-  Cluster-wide reset: stops every worker on every node, clears every node's
-  Subscriptions ETS, and resets every node's CallbackStats counter.
+  Cluster-wide reset: stops every worker on every node, then deletes every
+  subscription row from the shared DB.
 
-  More robust than iterating `list/0` and calling `unregister/1` because it
-  doesn't depend on the local Subscriptions ETS being in perfect sync —
-  any orphaned workers (e.g. from a flaky rolling deploy) get terminated too.
+  Each node's `Subscriptions.purge_local/0` runs via `:erpc.multicall` so
+  worker processes everywhere are torn down before the single
+  `Repo.delete_all/1` runs from the calling node.
   """
   @spec clear_all() :: :ok
   def clear_all do
     nodes = [Node.self() | Node.list()]
-    :erpc.multicall(nodes, Heartbeats.Subscriptions, :purge_local, [], 5_000)
-    :erpc.multicall(nodes, Heartbeats.CallbackStats, :reset, [], 5_000)
+    :erpc.multicall(nodes, Subscriptions, :purge_local, [], 5_000)
+    Repo.delete_all(Subscription)
     :ok
   end
 

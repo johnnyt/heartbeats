@@ -13,17 +13,20 @@ defmodule HeartbeatsWeb.ClusterLive do
   (function calls inside templates aren't tracked by the diff compiler).
 
   Subscribes to:
-    * `"subscriptions"` — register/delete events trigger a full refresh.
-    * `"callbacks"` — each callback bumps the inline total counter.
+    * `"subscriptions"` — register/delete events trigger a refresh so the
+      table updates immediately on user action (the 1s tick would catch up
+      anyway).
+    * `"deploy"` and `"chaos"` — banner state for the demo controls.
 
-  Polls every second for cross-node worker counts and ring membership
-  (the only numbers that need an RPC fan-out — done as one parallel
-  `:erpc.multicall` to avoid serialised blocking).
+  Polls every second on a `:tick`. Subscription rows + callback counts come
+  from a single `Heartbeats.list/0` query (Postgres is shared, so any node
+  sees the same rows). Cross-node worker counts come from a parallel
+  `:erpc.multicall` to each node's `Placement.stats/0`.
   """
 
   use HeartbeatsWeb, :live_view
 
-  alias Heartbeats.{CallbackStats, Chaos, Placement, Ring, RollingDeploy}
+  alias Heartbeats.{Chaos, Placement, Ring, RollingDeploy}
 
   @refresh_ms 1_000
   @rpc_timeout_ms 500
@@ -33,7 +36,6 @@ defmodule HeartbeatsWeb.ClusterLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "subscriptions")
-      Phoenix.PubSub.subscribe(Heartbeats.PubSub, "callbacks")
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "deploy")
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "chaos")
       Process.send_after(self(), :tick, @refresh_ms)
@@ -55,12 +57,6 @@ defmodule HeartbeatsWeb.ClusterLive do
 
   def handle_info({:put, _sub}, socket), do: {:noreply, refresh_state(socket)}
   def handle_info({:delete, _id}, socket), do: {:noreply, refresh_state(socket)}
-
-  def handle_info({:callback_received, _id, _node, _count}, socket) do
-    # Bump the cluster-wide counter cheaply; the next :tick will reconcile
-    # exact numbers from CallbackStats.
-    {:noreply, update(socket, :total_callbacks, &(&1 + 1))}
-  end
 
   ## Rolling deploy lifecycle
 
@@ -239,35 +235,35 @@ defmodule HeartbeatsWeb.ClusterLive do
         </div>
       </section>
 
-      <section class="grid md:grid-cols-3 gap-4">
+      <section class="grid grid-cols-3 gap-4">
         <form phx-submit="spawn" class="card bg-base-200 p-4 space-y-3">
           <h3 class="font-semibold">Spawn subscriptions</h3>
           <%!-- phx-update="ignore" prevents LiveView's diff from overwriting
                 user-typed values when the page re-renders on :tick. --%>
-          <div id="spawn-form-fields" phx-update="ignore" class="flex gap-2 items-end">
+          <div id="spawn-form-fields" phx-update="ignore" class="flex flex-wrap gap-2 items-end">
             <label class="form-control">
-              <span class="label-text">Count</span>
+              <span class="label-text text-xs">Count</span>
               <input
                 type="number"
                 name="count"
                 value="10"
                 min="1"
                 max={@max_spawn}
-                class="input input-bordered w-24"
+                class="input input-bordered input-sm w-20"
               />
             </label>
             <label class="form-control">
-              <span class="label-text">Interval (seconds)</span>
+              <span class="label-text text-xs">Interval (s)</span>
               <input
                 type="number"
                 name="interval_seconds"
                 value="5"
                 min="1"
                 step="1"
-                class="input input-bordered w-32"
+                class="input input-bordered input-sm w-20"
               />
             </label>
-            <button type="submit" class="btn btn-primary">Spawn</button>
+            <button type="submit" class="btn btn-primary btn-sm">Spawn</button>
           </div>
           <p class="text-xs text-base-content/60">
             Capped at {@max_spawn}. Each subscription POSTs to <code>/api/callbacks/&lt;id&gt;</code>
@@ -277,7 +273,7 @@ defmodule HeartbeatsWeb.ClusterLive do
 
         <div class="card bg-base-200 p-4 space-y-3">
           <h3 class="font-semibold">Demo controls</h3>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap gap-2">
             <button
               phx-click="inject_chaos"
               disabled={@chaos_state != :idle}
@@ -294,7 +290,8 @@ defmodule HeartbeatsWeb.ClusterLive do
             </button>
           </div>
           <p class="text-xs text-base-content/60">
-            <strong>Chaos</strong>: kills every worker on a random node (they restart locally). <strong>Rolling Deploy</strong>: cordon → drain → uncordon, one node at a time.
+            <strong>Chaos</strong>: kills every worker on a random node, recovers in ~2.5s.<br/>
+            <strong>Rolling Deploy</strong>: cordon → drain → uncordon, one node at a time.
           </p>
         </div>
 
@@ -308,7 +305,7 @@ defmodule HeartbeatsWeb.ClusterLive do
             Clear all subscriptions
           </button>
           <p class="text-xs text-base-content/60">
-            Stops every worker, drops every subscription, and resets local callback counters.
+            Stops every worker on every node and empties the subscriptions table.
           </p>
         </div>
       </section>
@@ -372,13 +369,12 @@ defmodule HeartbeatsWeb.ClusterLive do
   defp refresh_state(socket) do
     members = Ring.members()
     stats_by_node = fetch_all_stats(members)
-    callback_counts = CallbackStats.all()
-    raw_subs = Heartbeats.list() |> Enum.sort_by(& &1.id)
+    raw_subs = Heartbeats.list()
 
-    subscriptions = Enum.map(raw_subs, &build_sub_view(&1, callback_counts))
+    subscriptions = Enum.map(raw_subs, &build_sub_view/1)
     {by_node, unassigned} = group_subs(subscriptions, members)
     nodes = Enum.map(members, &node_summary(&1, stats_by_node, by_node))
-    total_callbacks = callback_counts |> Map.values() |> Enum.sum()
+    total_callbacks = Enum.reduce(subscriptions, 0, fn s, acc -> acc + s.callbacks end)
 
     socket
     |> assign(:nodes, nodes)
@@ -388,13 +384,13 @@ defmodule HeartbeatsWeb.ClusterLive do
     |> assign(:total_callbacks, total_callbacks)
   end
 
-  defp build_sub_view(sub, callback_counts) do
+  defp build_sub_view(sub) do
     %{
       id: sub.id,
       callback_url: sub.callback_url,
       interval_ms: sub.interval_ms,
       owner: owner_atom(sub.id),
-      callbacks: Map.get(callback_counts, sub.id, 0)
+      callbacks: sub.callbacks_count
     }
   end
 

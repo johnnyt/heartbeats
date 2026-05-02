@@ -24,13 +24,12 @@ defmodule Heartbeats.GracefulShutdownTest do
   end
 
   test "terminate/2 returns :ok even if drain times out (single-node, nowhere to migrate)" do
-    sub =
-      Heartbeats.Subscription.new(%{
+    {:ok, sub} =
+      Heartbeats.Subscriptions.put(%{
         callback_url: "http://localhost:65535/x",
         interval_ms: 60_000
       })
 
-    Heartbeats.Subscriptions.put(sub)
     {:ok, _pid} = Heartbeats.WorkerSupervisor.start_worker(sub)
 
     # Cordoning the only node leaves the worker no place to migrate to.

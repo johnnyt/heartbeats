@@ -30,7 +30,8 @@ defmodule HeartbeatsTest do
       })
 
     assert String.starts_with?(sub.id, "sub_")
-    assert {:ok, ^sub} = Subscriptions.get(sub.id)
+    assert {:ok, fetched} = Subscriptions.get(sub.id)
+    assert fetched.id == sub.id
     assert is_pid(Worker.whereis(sub.id))
   end
 

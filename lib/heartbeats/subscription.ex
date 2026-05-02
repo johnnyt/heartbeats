@@ -1,64 +1,79 @@
 defmodule Heartbeats.Subscription do
   @moduledoc """
-  Represents one subscription that needs heartbeats sent to its `callback_url`
-  every `interval_ms` milliseconds.
+  Ecto schema for one subscription that needs heartbeats sent to its
+  `callback_url` every `interval_ms` milliseconds.
 
   Mirrors the relevant subset of fields from the Apollo HTTP Callback Protocol.
+  `callbacks_count` lives on the row itself — incrementing it on every
+  callback receive lets the dashboard show per-sub activity without a
+  separate counter store.
   """
 
-  @enforce_keys [:id, :callback_url, :interval_ms, :verifier]
-  defstruct [:id, :callback_url, :interval_ms, :verifier]
+  use Ecto.Schema
+
+  import Ecto.Changeset
+
+  @min_interval_ms 500
 
   @type t :: %__MODULE__{
           id: String.t(),
           callback_url: String.t(),
           interval_ms: pos_integer(),
-          verifier: String.t()
+          verifier: String.t(),
+          callbacks_count: non_neg_integer()
         }
 
-  @min_interval_ms 500
+  @primary_key {:id, :string, autogenerate: false}
+  schema "subscriptions" do
+    field(:callback_url, :string)
+    field(:interval_ms, :integer)
+    field(:verifier, :string)
+    field(:callbacks_count, :integer, default: 0)
 
-  @spec new(map()) :: t()
-  def new(attrs) when is_map(attrs) do
-    attrs = atomize(attrs)
-
-    %__MODULE__{
-      id: Map.get(attrs, :id) || generate_id(),
-      callback_url: fetch!(attrs, :callback_url),
-      interval_ms: validate_interval!(Map.get(attrs, :interval_ms, 5_000)),
-      verifier: Map.get(attrs, :verifier) || generate_verifier()
-    }
+    timestamps(type: :utc_datetime_usec)
   end
 
+  @doc """
+  Builds a changeset for inserting/updating a subscription. Auto-generates
+  `id` and `verifier` if not provided.
+  """
+  @spec changeset(t() | %__MODULE__{}, map()) :: Ecto.Changeset.t()
+  def changeset(subscription \\ %__MODULE__{}, attrs) do
+    attrs =
+      attrs
+      |> stringify_keys()
+      |> put_default("id", &generate_id/0)
+      |> put_default("verifier", &generate_verifier/0)
+      |> put_default("interval_ms", fn -> 5_000 end)
+
+    subscription
+    |> cast(attrs, [:id, :callback_url, :interval_ms, :verifier])
+    |> validate_required([:id, :callback_url, :interval_ms, :verifier])
+    |> validate_number(:interval_ms, greater_than_or_equal_to: @min_interval_ms)
+  end
+
+  @doc "Generates a UXID-prefixed subscription id."
   @spec generate_id() :: String.t()
   def generate_id do
     UXID.generate!(prefix: "sub", size: :small)
   end
 
-  defp atomize(attrs) do
-    Map.new(attrs, fn
-      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
-      {k, v} when is_atom(k) -> {k, v}
-    end)
-  rescue
-    ArgumentError -> attrs
-  end
-
-  defp fetch!(attrs, key) do
-    case Map.fetch(attrs, key) do
-      {:ok, value} when is_binary(value) and byte_size(value) > 0 -> value
-      _other -> raise ArgumentError, "missing required field: #{inspect(key)}"
-    end
-  end
-
-  defp validate_interval!(ms) when is_integer(ms) and ms >= @min_interval_ms, do: ms
-
-  defp validate_interval!(ms) do
-    raise ArgumentError,
-          "interval_ms must be an integer >= #{@min_interval_ms}, got: #{inspect(ms)}"
-  end
-
   defp generate_verifier do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
+  end
+
+  defp stringify_keys(attrs) do
+    Map.new(attrs, fn
+      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
+      {k, v} -> {k, v}
+    end)
+  end
+
+  defp put_default(attrs, key, default_fn) do
+    case Map.get(attrs, key) do
+      nil -> Map.put(attrs, key, default_fn.())
+      "" -> Map.put(attrs, key, default_fn.())
+      _other -> attrs
+    end
   end
 end

@@ -1,14 +1,18 @@
 defmodule Heartbeats.ChaosTest do
   use Heartbeats.Case
 
-  alias Heartbeats.{Chaos, Subscription, Subscriptions, Worker, WorkerSupervisor}
+  alias Heartbeats.{Chaos, Subscriptions, Worker, WorkerSupervisor}
 
-  defp build_sub(overrides \\ %{}) do
-    Map.merge(
-      %{callback_url: "http://localhost:65535/no-listener", interval_ms: 60_000},
-      overrides
-    )
-    |> Subscription.new()
+  defp persist!(overrides \\ %{}) do
+    {:ok, sub} =
+      Subscriptions.put(
+        Map.merge(
+          %{callback_url: "http://localhost:65535/no-listener", interval_ms: 60_000},
+          overrides
+        )
+      )
+
+    sub
   end
 
   test "kill_local_workers/0 returns 0 when there are no workers" do
@@ -16,8 +20,7 @@ defmodule Heartbeats.ChaosTest do
   end
 
   test "kill_local_workers/0 terminates every running worker and returns the count" do
-    sub = build_sub()
-    Subscriptions.put(sub)
+    sub = persist!()
     {:ok, pid} = WorkerSupervisor.start_worker(sub)
     ref = Process.monitor(pid)
 
@@ -27,8 +30,7 @@ defmodule Heartbeats.ChaosTest do
   end
 
   test "kill_local_workers/0 triggers a delayed rebalance that re-adopts the orphans" do
-    sub = build_sub()
-    Subscriptions.put(sub)
+    sub = persist!()
     {:ok, original_pid} = WorkerSupervisor.start_worker(sub)
     Phoenix.PubSub.subscribe(Heartbeats.PubSub, "chaos")
 
@@ -38,12 +40,15 @@ defmodule Heartbeats.ChaosTest do
     # downtime window. Wait for the recovered broadcast plus a fresh worker.
     assert_receive {:chaos, :recovered, _node}, 5_000
 
-    Heartbeats.Case.wait_until(fn ->
-      case Worker.whereis(sub.id) do
-        nil -> false
-        pid -> pid != original_pid
-      end
-    end)
+    wait_until(
+      fn ->
+        case Worker.whereis(sub.id) do
+          nil -> false
+          pid -> pid != original_pid
+        end
+      end,
+      1_000
+    )
   end
 
   test "random_kill/0 returns {:error, :no_nodes} when ring is empty" do
@@ -56,8 +61,7 @@ defmodule Heartbeats.ChaosTest do
   test "random_kill/0 broadcasts a chaos event" do
     Phoenix.PubSub.subscribe(Heartbeats.PubSub, "chaos")
 
-    sub = build_sub()
-    Subscriptions.put(sub)
+    sub = persist!()
     {:ok, _pid} = WorkerSupervisor.start_worker(sub)
 
     {:ok, %{node: target, killed: killed}} = Chaos.random_kill()
@@ -66,6 +70,6 @@ defmodule Heartbeats.ChaosTest do
     assert_receive {:chaos, :killed, ^target, _}, 500
 
     # The replacement worker comes up after the visible recovery delay (~2.5s).
-    Heartbeats.Case.wait_until(fn -> Worker.whereis(sub.id) != nil end, 5_000)
+    wait_until(fn -> Worker.whereis(sub.id) != nil end, 5_000)
   end
 end

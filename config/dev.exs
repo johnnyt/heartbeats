@@ -1,5 +1,16 @@
 import Config
 
+# Configure the Postgres database. Override via env vars (DATABASE_URL etc.)
+# in runtime.exs if you want.
+config :heartbeats, Heartbeats.Repo,
+  username: System.get_env("PGUSER", "postgres"),
+  password: System.get_env("PGPASSWORD", "postgres"),
+  hostname: System.get_env("PGHOST", "localhost"),
+  database: "heartbeats_dev",
+  stacktrace: true,
+  show_sensitive_data_on_connection_error: true,
+  pool_size: 10
+
 # For development, we disable any cache and enable
 # debugging and code reloading.
 #

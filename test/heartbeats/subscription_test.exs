@@ -3,48 +3,66 @@ defmodule Heartbeats.SubscriptionTest do
 
   alias Heartbeats.Subscription
 
-  describe "new/1" do
-    test "generates a UXID-prefixed id when none is given" do
-      sub = Subscription.new(%{callback_url: "http://example.com/cb", interval_ms: 1_000})
-      assert String.starts_with?(sub.id, "sub_")
-      # The exact length depends on the configured UXID size; just sanity-check
-      # that there's a non-empty payload after the prefix.
-      assert byte_size(sub.id) > byte_size("sub_")
+  describe "changeset/2" do
+    test "auto-generates a UXID-prefixed id when not given" do
+      changeset = Subscription.changeset(%{callback_url: "http://example.com/cb"})
+      id = Ecto.Changeset.get_field(changeset, :id)
+      assert String.starts_with?(id, "sub_")
+      assert byte_size(id) > byte_size("sub_")
     end
 
     test "preserves an explicit id when given" do
-      sub =
-        Subscription.new(%{
-          id: "sub_explicit",
-          callback_url: "http://example.com/cb",
-          interval_ms: 1_000
-        })
+      changeset =
+        Subscription.changeset(%{id: "sub_explicit", callback_url: "http://example.com/cb"})
 
-      assert sub.id == "sub_explicit"
+      assert Ecto.Changeset.get_field(changeset, :id) == "sub_explicit"
     end
 
-    test "generates a verifier when none is given" do
-      sub = Subscription.new(%{callback_url: "http://example.com/cb", interval_ms: 1_000})
-      assert is_binary(sub.verifier)
-      assert byte_size(sub.verifier) > 0
+    test "auto-generates a verifier when not given" do
+      changeset = Subscription.changeset(%{callback_url: "http://example.com/cb"})
+      verifier = Ecto.Changeset.get_field(changeset, :verifier)
+      assert is_binary(verifier)
+      assert byte_size(verifier) > 0
+    end
+
+    test "defaults interval_ms to 5_000 when not given" do
+      changeset = Subscription.changeset(%{callback_url: "http://example.com/cb"})
+      assert Ecto.Changeset.get_field(changeset, :interval_ms) == 5_000
     end
 
     test "accepts string-keyed maps" do
-      sub = Subscription.new(%{"callback_url" => "http://example.com/cb", "interval_ms" => 1_000})
-      assert sub.callback_url == "http://example.com/cb"
-      assert sub.interval_ms == 1_000
+      changeset =
+        Subscription.changeset(%{
+          "callback_url" => "http://example.com/cb",
+          "interval_ms" => 1_000
+        })
+
+      assert Ecto.Changeset.get_field(changeset, :callback_url) == "http://example.com/cb"
+      assert Ecto.Changeset.get_field(changeset, :interval_ms) == 1_000
     end
 
     test "rejects missing callback_url" do
-      assert_raise ArgumentError, ~r/callback_url/, fn ->
-        Subscription.new(%{interval_ms: 1_000})
-      end
+      changeset = Subscription.changeset(%{interval_ms: 1_000})
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset, :callback_url)
     end
 
     test "rejects interval_ms below 500" do
-      assert_raise ArgumentError, ~r/interval_ms/, fn ->
-        Subscription.new(%{callback_url: "http://example.com/cb", interval_ms: 100})
-      end
+      changeset =
+        Subscription.changeset(%{callback_url: "http://example.com/cb", interval_ms: 100})
+
+      refute changeset.valid?
+      assert Enum.any?(errors_on(changeset, :interval_ms), &String.contains?(&1, "500"))
     end
+  end
+
+  defp errors_on(changeset, field) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
+      Regex.replace(~r"%{(\w+)}", msg, fn _full, key ->
+        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+      end)
+    end)
+    |> Map.get(field, [])
   end
 end

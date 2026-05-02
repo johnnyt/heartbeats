@@ -78,21 +78,29 @@ defmodule Heartbeats.ClusterTest do
     assert worker_count(b) <= initial_b
   end
 
-  test "callback stats replicate across the cluster" do
+  test "every peer sees the same DB-backed callbacks_count" do
     [a, b, c] = start_cluster(3)
 
-    # Record callbacks on a; every peer should converge to the same view.
-    :erpc.call(a, Heartbeats.CallbackStats, :record, ["sub_x"])
-    :erpc.call(a, Heartbeats.CallbackStats, :record, ["sub_x"])
-    :erpc.call(a, Heartbeats.CallbackStats, :record, ["sub_y"])
+    {:ok, sub} =
+      :erpc.call(a, Heartbeats.Subscriptions, :put, [
+        %{callback_url: "http://localhost:65535/cb", interval_ms: 60_000}
+      ])
 
+    # Increment the row directly via SQL on a (mimicking what the controller does).
+    import Ecto.Query
+
+    query = from(s in Heartbeats.Subscription, where: s.id == ^sub.id)
+    :erpc.call(a, Heartbeats.Repo, :update_all, [query, [inc: [callbacks_count: 3]]])
+
+    # Every peer reads the same DB, so they all see callbacks_count = 3 for sub.id.
     wait_until(fn ->
-      Enum.all?([b, c], fn n ->
-        :erpc.call(n, Heartbeats.CallbackStats, :all, []) == %{"sub_x" => 2, "sub_y" => 1}
+      Enum.all?([a, b, c], fn n ->
+        case :erpc.call(n, Heartbeats.Subscriptions, :get, [sub.id]) do
+          {:ok, %{callbacks_count: 3}} -> true
+          _other -> false
+        end
       end)
     end)
-
-    assert :erpc.call(a, Heartbeats.CallbackStats, :all, []) == %{"sub_x" => 2, "sub_y" => 1}
   end
 
   @tag timeout: 60_000

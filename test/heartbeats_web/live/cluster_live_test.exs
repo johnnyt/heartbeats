@@ -4,12 +4,6 @@ defmodule HeartbeatsWeb.ClusterLiveTest do
 
   import Phoenix.LiveViewTest
 
-  setup do
-    Heartbeats.CallbackStats.reset()
-    on_exit(&Heartbeats.CallbackStats.reset/0)
-    :ok
-  end
-
   test "mounts and renders the empty state", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/")
     assert html =~ "Heartbeats Cluster"
@@ -33,7 +27,6 @@ defmodule HeartbeatsWeb.ClusterLiveTest do
 
     html = render(view)
     assert html =~ "3 subscriptions"
-    refute html =~ "No subscriptions registered."
   end
 
   test "spawn event registers the requested number of subscriptions", %{conn: conn} do
@@ -65,17 +58,64 @@ defmodule HeartbeatsWeb.ClusterLiveTest do
     assert render(view) =~ "0 subscriptions"
   end
 
-  test "callback_received message increments the visible counter", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/")
+  describe "demo control banners" do
+    test "deploy events drive the rolling-deploy banner through its phases", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
 
-    Phoenix.PubSub.broadcast(
-      Heartbeats.PubSub,
-      "callbacks",
-      {:callback_received, "sub_demo", node(), 1}
-    )
+      Phoenix.PubSub.broadcast(Heartbeats.PubSub, "deploy", {:deploy, {:start, 3}})
+      assert render(view) =~ "Starting rolling deploy across 3 nodes"
 
-    # Give the LiveView a moment to handle the message.
-    Process.sleep(50)
-    assert render(view) =~ ~r/<span class="font-mono">\s*1/
+      Phoenix.PubSub.broadcast(Heartbeats.PubSub, "deploy", {:deploy, {:cordon, :"a@127.0.0.1"}})
+      assert render(view) =~ "Cordoning a@127.0.0.1"
+
+      Phoenix.PubSub.broadcast(
+        Heartbeats.PubSub,
+        "deploy",
+        {:deploy, {:draining, :"a@127.0.0.1", 7}}
+      )
+
+      assert render(view) =~ "Draining a@127.0.0.1 (7 workers remaining)"
+
+      Phoenix.PubSub.broadcast(
+        Heartbeats.PubSub,
+        "deploy",
+        {:deploy, {:uncordon, :"a@127.0.0.1"}}
+      )
+
+      assert render(view) =~ "Uncordoning a@127.0.0.1"
+
+      Phoenix.PubSub.broadcast(Heartbeats.PubSub, "deploy", {:deploy, :complete})
+      refute render(view) =~ "Uncordoning"
+    end
+
+    test "chaos events show and clear the banner", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      Phoenix.PubSub.broadcast(
+        Heartbeats.PubSub,
+        "chaos",
+        {:chaos, :killed, :"a@127.0.0.1", 4}
+      )
+
+      html = render(view)
+      assert html =~ "Chaos on"
+      assert html =~ "killed 4 workers"
+
+      Phoenix.PubSub.broadcast(Heartbeats.PubSub, "chaos", {:chaos, :recovered, :"a@127.0.0.1"})
+      refute render(view) =~ "Chaos on"
+    end
+
+    test "inject_chaos with empty ring returns :no_nodes", %{conn: conn} do
+      Heartbeats.Ring.cordon(node())
+      on_exit(fn -> Heartbeats.Ring.uncordon(node()) end)
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      # The handler returns {:error, :no_nodes} — we just need to confirm
+      # it doesn't crash the LiveView. Same for rolling_deploy.
+      _html = render_click(view, "inject_chaos")
+      _html = render_click(view, "rolling_deploy")
+      assert Process.alive?(view.pid)
+    end
   end
 end

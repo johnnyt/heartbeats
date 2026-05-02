@@ -9,14 +9,13 @@ defmodule Heartbeats.Application do
   def start(_type, _args) do
     children =
       [
+        Heartbeats.Repo,
         HeartbeatsWeb.Telemetry,
         {Phoenix.PubSub, name: Heartbeats.PubSub}
       ] ++
         cluster_children() ++
         [
           {Registry, keys: :unique, name: Heartbeats.Registry},
-          Heartbeats.Subscriptions,
-          Heartbeats.CallbackStats,
           Heartbeats.WorkerSupervisor,
           Heartbeats.Placement,
           Heartbeats.RollingDeploy,

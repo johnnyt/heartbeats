@@ -24,6 +24,8 @@ defmodule Heartbeats.ClusterCase do
 
   use ExUnit.CaseTemplate
 
+  alias Ecto.Adapters.SQL.Sandbox
+
   using opts do
     quote do
       use ExUnit.Case, unquote(opts)
@@ -36,6 +38,15 @@ defmodule Heartbeats.ClusterCase do
       {:ok, _pid} = Node.start(:"primary@127.0.0.1", :longnames)
       Node.set_cookie(:heartbeats_test_cookie)
     end
+
+    # Cluster tests can't use the per-test sandbox transactions because the
+    # peers run on different BEAM nodes — they each have their own Repo
+    # connection pool and can't share a sandbox checkout. Switch the Repo
+    # to `:auto` mode so writes commit immediately and every node sees the
+    # same data; tests clean up explicitly via `Repo.delete_all/1` in
+    # `clear_runner_state!/0`.
+    Sandbox.mode(Heartbeats.Repo, :auto)
+    on_exit(fn -> Sandbox.mode(Heartbeats.Repo, :manual) end)
 
     :ok
   end
@@ -152,6 +163,32 @@ defmodule Heartbeats.ClusterCase do
       end
     end
 
+    # Strip the test sandbox pool from the peer's Repo config — peers can't
+    # share the runner's sandbox checkouts, and they're already operating in
+    # `:auto` mode (set in `setup_all`). Peers use the default DBConnection
+    # pool and write directly to the test DB.
+    peer_repo_config =
+      :heartbeats
+      |> Application.get_env(Heartbeats.Repo, [])
+      |> Keyword.delete(:pool)
+
+    :erpc.call(node, Application, :put_env, [
+      :heartbeats,
+      Heartbeats.Repo,
+      peer_repo_config,
+      [persistent: true]
+    ])
+
+    # Disable libcluster on peers — tests wire them up manually with
+    # `Node.connect/1`, and `Cluster.Strategy.LocalEpmd` can fail with
+    # `{:error, :address}` on macOS when the hostname doesn't resolve.
+    :erpc.call(node, Application, :put_env, [
+      :heartbeats,
+      :clustering_enabled,
+      false,
+      [persistent: true]
+    ])
+
     # Boot the application on the peer.
     {:ok, _started} = :erpc.call(node, Application, :ensure_all_started, [:heartbeats])
 
@@ -184,9 +221,10 @@ defmodule Heartbeats.ClusterCase do
       DynamicSupervisor.terminate_child(Heartbeats.WorkerSupervisor, pid)
     end
 
-    for sub <- Heartbeats.Subscriptions.all() do
-      Heartbeats.Subscriptions.delete(sub.id)
-    end
+    # Cluster tests don't use the Ecto sandbox (peers can't share it across
+    # node boundaries), so writes to the DB persist between tests. Clear the
+    # subscriptions table directly.
+    Heartbeats.Repo.delete_all(Heartbeats.Subscription)
 
     :ok
   end

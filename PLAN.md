@@ -9,13 +9,14 @@ nodes come and go.
 - **Naming**: split the sibling project's `HeartbeatScheduler` into a pure
   `Heartbeats.Ring` module + a `Heartbeats.Placement` GenServer. Worker, Registry,
   and supervisor names drop the redundant `Heartbeat*` prefix.
-- **Storage**: ETS only. No Postgres, no `Bootstrap` task. Each subscription
-  registration is broadcast (via `Phoenix.PubSub`) to every node so every node
-  has the full set in its local ETS — required for ownership transfer when a
-  node dies. (Why not mnesia? It would dominate the codebase mentally and
-  compete with libring for the reader's attention. Why not a single owner
-  GenServer? Single point of failure that breaks the Chaos demo. Why not
-  worker-as-state? A `kill -9` on a node loses subscriptions with no peer copy.)
+- **Storage**: shared **Postgres** via Ecto, single source of truth for every
+  node. Phases 1–6 used a replicated ETS store with PubSub-driven sync; Phase
+  6.5 swaps to Postgres so the storage layer fades into the background and
+  libring + `:erpc` stand out as the interesting parts. Aligns with the
+  production sibling. (Earlier rejected alternatives: ETS-only forced us to
+  hand-roll replication that paralleled the libring story rather than
+  reinforcing it; a single-owner GenServer would be a SPOF that breaks the
+  Chaos demo; worker-as-state would lose subs on `kill -9`.)
 - **Graceful shutdown**: SIGTERM / `Ctrl-C` triggers a `GracefulShutdown`
   GenServer that cordons the local node, calls `rebalance_local/0`, and waits
   for workers to drain before the BEAM exits. Mirrors what a real k8s rolling
@@ -38,8 +39,9 @@ nodes come and go.
 | DynamicSupervisor for workers | `Heartbeats.WorkerSupervisor` |
 | Per-subscription GenServer | `Heartbeats.Worker` |
 | Registry of running workers | `Heartbeats.Registry` (atom name) |
-| Subscription struct | `Heartbeats.Subscription` |
-| Replicated in-memory store | `Heartbeats.Subscriptions` |
+| Subscription Ecto schema | `Heartbeats.Subscription` |
+| Subscriptions context (Repo wrapper) | `Heartbeats.Subscriptions` |
+| Ecto repo | `Heartbeats.Repo` |
 | Public facade | `Heartbeats` |
 | Phoenix endpoint | `HeartbeatsWeb.Endpoint` |
 | Register/delete API | `HeartbeatsWeb.SubscriptionController` |
@@ -51,14 +53,15 @@ nodes come and go.
 
 ## Final supervision tree
 
-1. `Heartbeats.PubSub` — `Phoenix.PubSub` adapter
-2. `{Cluster.Supervisor, [topology, [name: Heartbeats.ClusterSupervisor]]}` — *conditional* on `should_cluster?/2`
-3. `{Registry, keys: :unique, name: Heartbeats.Registry}`
-4. `Heartbeats.Subscriptions` — ETS owner GenServer, subscribes to `"subscriptions"` PubSub topic for replication
+1. `Heartbeats.Repo` — Ecto Postgres repo (every node connects to the same DB)
+2. `Heartbeats.PubSub` — `Phoenix.PubSub` adapter (used for live deploy/chaos events; storage no longer needs it)
+3. `{Cluster.Supervisor, [topology, [name: Heartbeats.ClusterSupervisor]]}` — *conditional* on `should_cluster?/2`
+4. `{Registry, keys: :unique, name: Heartbeats.Registry}`
 5. `Heartbeats.WorkerSupervisor` — DynamicSupervisor
 6. `Heartbeats.Placement` — RPC target; monitors `:net_kernel.monitor_nodes/1`; on `:nodeup`/`:nodedown` broadcasts `:rebalance` to its local workers
-7. `HeartbeatsWeb.Endpoint`
-8. `Heartbeats.GracefulShutdown` — last child; supervisors stop in reverse order, so its `terminate/2` runs first on shutdown and drains the node
+7. `Heartbeats.RollingDeploy` — GenServer driving cordon/drain/uncordon sequences
+8. `HeartbeatsWeb.Endpoint`
+9. `Heartbeats.GracefulShutdown` — last child; supervisors stop in reverse order, so its `terminate/2` runs first on shutdown and drains the node
 
 ---
 
@@ -373,6 +376,160 @@ self-healing behavior without touching a terminal.
 - [x] Heartbeats received counter on the dashboard keeps climbing throughout — no perceptible gap, demonstrating zero-downtime.
 - [x] Click **Rolling Deploy** twice quickly: second click is a no-op (or shows a flash like "already in progress").
 
+🛑 **PAUSE — wait for confirmation that manual verification passed before starting Phase 6.5.**
+
+---
+
+## Phase 6.5 — Swap replicated ETS for shared Postgres
+
+**Goal**: Move the source of truth for subscriptions and callback counts into
+a shared Postgres database. Every node connects to the same DB; the
+hand-rolled replication layer goes away. Dashboard reads everything off the
+DB on its 1-second tick — the live counter and the per-node subtotals stay in
+lockstep because they're derived from the same query.
+
+**Why now**: The replicated-ETS pattern was teaching alongside libring rather
+than reinforcing it. With a familiar Ecto-backed store, the libring + `:erpc`
+mechanics become the obvious main characters. Aligns with the production
+sibling (which is Postgres-backed), which is a nice "this is how it really
+works" handoff.
+
+**Postgres, not SQLite**: SQLite serializes writes, has cross-process file-lock
+quirks, and isn't what production looks like. Postgres is one `brew install
+postgresql@16 && brew services start postgresql@16` (or equivalent) and then
+identical to prod.
+
+### Files / actions
+
+- **Deps**: add `{:ecto_sql, "~> 3.12"}`, `{:postgrex, ">= 0.0.0"}`,
+  `{:phoenix_ecto, "~> 4.6"}`. Keep `:phoenix_live_dashboard` (already there).
+
+- **`lib/heartbeats/repo.ex`** — new. `use Ecto.Repo, otp_app: :heartbeats,
+  adapter: Ecto.Adapters.Postgres`.
+
+- **`lib/heartbeats/subscription.ex`** — convert from struct to Ecto schema:
+  ```elixir
+  use Ecto.Schema
+  @primary_key {:id, :string, autogenerate: false}
+  schema "subscriptions" do
+    field :callback_url, :string
+    field :interval_ms, :integer
+    field :verifier, :string
+    field :callbacks_count, :integer, default: 0
+    timestamps(type: :utc_datetime_usec)
+  end
+  ```
+  - `new/1` → `changeset/1` returning `%Ecto.Changeset{}`.
+  - `generate_id/0` stays (used by `register_many`).
+
+- **`lib/heartbeats/subscriptions.ex`** — collapse the GenServer into a thin
+  context module:
+  - `put/1` → `Repo.insert(changeset, on_conflict: :replace_all,
+    conflict_target: :id)` + broadcast `{:put, sub}` for the dashboard's
+    instant refresh.
+  - `delete/1` → `Repo.delete_all(from s in Subscription, where: s.id == ^id)`
+    + broadcast `{:delete, id}`.
+  - `get/1` → `Repo.get(Subscription, id)`.
+  - `all/0` → `Repo.all(Subscription)`.
+  - `count/0` → `Repo.aggregate(Subscription, :count, :id)`.
+  - `purge_local/0` → keep its current job (terminate every locally-running
+    worker), drop the ETS clear (DB-backed now). `Heartbeats.clear_all/0`
+    keeps `:erpc.multicall` to every node for `purge_local`, plus a single
+    `Repo.delete_all(Subscription)`.
+
+- **`lib/heartbeats/callback_stats.ex`** — **delete**. The counter becomes
+  the `callbacks_count` column. Replaced by:
+  - In `HeartbeatsWeb.CallbackController.receive_heartbeat/2`:
+    `Repo.update_all(from(s in Subscription, where: s.id == ^id), inc:
+    [callbacks_count: 1])`. No PubSub broadcast — dashboard polls.
+
+- **`lib/heartbeats/application.ex`** — drop `Heartbeats.CallbackStats` and
+  the legacy `Heartbeats.Subscriptions` GenServer; add `Heartbeats.Repo` as
+  the first child.
+
+- **`lib/heartbeats_web/live/cluster_live.ex`** — three changes:
+  1. **Drop the `{:callback_received}` handler**. The header counter now
+     refreshes on the 1-second `:tick` along with everything else, so it
+     stays in lockstep with per-node subtotals (no more "header at 318,
+     bottom adds to 312" drift).
+  2. Drop the `:chaos` topic subscription's `:stats_replica` machinery
+     (gone with `CallbackStats`). The chaos banner still works via
+     `{:chaos, :killed, …}` / `{:chaos, :recovered, …}`.
+  3. `refresh_state/1` does one `Repo.all(Subscription)` and reads
+     `callbacks_count` directly off each row. No more `CallbackStats.all()`
+     map merge.
+
+- **`priv/repo/migrations/<timestamp>_create_subscriptions.exs`** — single
+  migration creating the `subscriptions` table. Index on `id` (PK is enough),
+  no other indexes needed for demo scale.
+
+- **`config/config.exs`** — add `config :heartbeats, ecto_repos:
+  [Heartbeats.Repo]`.
+
+- **`config/dev.exs`** — repo config (username/password from env, default
+  `postgres`/`postgres`, database `heartbeats_dev`).
+
+- **`config/test.exs`** — repo config (database `heartbeats_test`,
+  `pool: Ecto.Adapters.SQL.Sandbox`).
+
+- **`config/runtime.exs`** — read `DATABASE_URL` for prod-style runs;
+  default to local for dev.
+
+- **`mix.exs`** aliases — add `setup` to run `ecto.create` + `ecto.migrate` +
+  `assets.setup` so `mix setup` works for first-time clones.
+
+- **`test/support/data_case.ex`** — new, standard Phoenix Ecto sandbox case.
+  Tests that hit the DB `use Heartbeats.DataCase` for sandbox isolation.
+
+- **`test/support/heartbeats_case.ex`** + **`test/support/cluster_case.ex`** —
+  switch to sandbox-aware setup. For `ClusterCase` peers also need
+  `Ecto.Adapters.SQL.Sandbox.allow/3` to share the test connection across
+  RPC boundaries (or each peer uses `Sandbox.mode/2` in its setup).
+
+- **`test/heartbeats/callback_stats_test.exs`** — delete.
+
+- **`test/heartbeats_test.exs`**, **`test/heartbeats/subscriptions_test.exs`**,
+  controller tests — adjust assertions for Ecto records (`%Subscription{}`
+  with timestamps, etc.) and DB-backed counts.
+
+- **`test/heartbeats/cluster_test.exs`** — the "callback stats replicate
+  across the cluster" test gets reframed: every peer sees the same
+  `callbacks_count` because they share the DB, not because of replication.
+  Same assertion, different mechanism.
+
+### Automatic verification
+
+- [x] `mix quality` passes.
+- [x] `mix ecto.create && mix ecto.migrate` runs cleanly.
+- [x] All previous tests pass against the new storage (subscription_controller,
+      callback_controller, cluster_test, etc.).
+- [x] `Heartbeats.CallbackStats` is gone; no stragglers (`grep -r CallbackStats lib/`
+      returns nothing).
+- [x] No more `"callbacks_replica"` PubSub topic.
+
+### Manual verification
+
+Three terminals as before — but first `mix ecto.create && mix ecto.migrate`
+once.
+
+```sh
+iex --name a@127.0.0.1 -S mix phx.server
+PORT=4101 iex --name b@127.0.0.1 -S mix phx.server
+PORT=4102 iex --name c@127.0.0.1 -S mix phx.server
+```
+
+- [x] All three nodes connect to the same DB; spawning subs from any node
+      shows up immediately in every tab.
+- [x] The header `N callbacks received` and the sum of per-node `callbacks`
+      always match (in lockstep at every 1-second refresh).
+- [x] **Sudden death** of node `c@`: surviving nodes adopt orphans within
+      ~5s. The DB still has the subs (no replication needed).
+- [x] **Inject Chaos**: chosen node's worker count drops, banner shows for
+      ~2.5s, then bounces back. Same as before.
+- [x] **Rolling Deploy**: each phase visible, total worker count preserved,
+      dashboard counters smooth.
+- [x] **Clear All**: every node's worker count + DB row count both drop to 0.
+
 🛑 **PAUSE — wait for confirmation that manual verification passed before starting Phase 7.**
 
 ---
@@ -417,3 +574,4 @@ README in under five minutes.
 ## Open questions to resolve as we go
 
 - **Subscription verifier authentication on the callback receiver** — strictly speaking, Apollo HTTP Callback Protocol checks the verifier matches. For the demo we can accept all callbacks (since the same app sends and receives), but a single check would be a nice educational touch.
+- **Cross-peer Ecto sandbox** in `ClusterCase` — peer nodes started by `:peer` will need to share the test runner's DB connection (via `Ecto.Adapters.SQL.Sandbox.allow/3`) or run in `:shared` sandbox mode. Decide during Phase 6.5 once the regular sandbox is wired.

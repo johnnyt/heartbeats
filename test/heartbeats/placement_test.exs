@@ -1,19 +1,22 @@
 defmodule Heartbeats.PlacementTest do
   use Heartbeats.Case
 
-  alias Heartbeats.{Placement, Subscription, Subscriptions, Worker}
+  alias Heartbeats.{Placement, Subscriptions, Worker}
 
-  defp build_sub(overrides \\ %{}) do
-    Map.merge(
-      %{callback_url: "http://localhost:65535/no-listener", interval_ms: 60_000},
-      overrides
-    )
-    |> Subscription.new()
+  defp persist!(overrides \\ %{}) do
+    {:ok, sub} =
+      Subscriptions.put(
+        Map.merge(
+          %{callback_url: "http://localhost:65535/no-listener", interval_ms: 60_000},
+          overrides
+        )
+      )
+
+    sub
   end
 
   test "place/1 starts a local worker registered under the via tuple" do
-    sub = build_sub()
-    Subscriptions.put(sub)
+    sub = persist!()
 
     assert {:ok, pid} = Placement.place(sub)
     assert Process.alive?(pid)
@@ -21,8 +24,7 @@ defmodule Heartbeats.PlacementTest do
   end
 
   test "place/1 returns {:error, :unschedulable} when the ring is empty" do
-    sub = build_sub()
-    Subscriptions.put(sub)
+    sub = persist!()
 
     Heartbeats.Ring.cordon(node())
     on_exit(fn -> Heartbeats.Ring.uncordon(node()) end)
@@ -31,9 +33,7 @@ defmodule Heartbeats.PlacementTest do
   end
 
   test "unplace/1 stops a running worker" do
-    sub = build_sub()
-    Subscriptions.put(sub)
-
+    sub = persist!()
     {:ok, pid} = Placement.place(sub)
     ref = Process.monitor(pid)
 
@@ -44,8 +44,7 @@ defmodule Heartbeats.PlacementTest do
   end
 
   test "stats/0 reports local worker count and node" do
-    sub = build_sub()
-    Subscriptions.put(sub)
+    sub = persist!()
     {:ok, _pid} = Placement.place(sub)
 
     stats = Placement.stats()

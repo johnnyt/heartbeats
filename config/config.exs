@@ -8,6 +8,7 @@
 import Config
 
 config :heartbeats,
+  ecto_repos: [Heartbeats.Repo],
   generators: [timestamp_type: :utc_datetime],
   clustering_enabled: true
 

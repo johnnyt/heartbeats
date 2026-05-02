@@ -21,16 +21,26 @@ defmodule HeartbeatsWeb.SubscriptionController do
         |> put_status(:created)
         |> json(serialize(sub))
 
+      {:error, %Ecto.Changeset{} = changeset} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: format_changeset_errors(changeset)})
+
       {:error, :unschedulable} ->
         conn
         |> put_status(:service_unavailable)
         |> json(%{error: "no nodes are available in the ring"})
     end
-  rescue
-    e in ArgumentError ->
-      conn
-      |> put_status(:bad_request)
-      |> json(%{error: Exception.message(e)})
+  end
+
+  defp format_changeset_errors(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
+      Regex.replace(~r"%{(\w+)}", msg, fn _full, key ->
+        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+      end)
+    end)
+    |> Enum.map_join("; ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
   end
 
   @doc "Stops the worker and removes the subscription from the cluster."

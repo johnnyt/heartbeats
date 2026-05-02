@@ -2,14 +2,16 @@ defmodule HeartbeatsWeb.CallbackController do
   @moduledoc """
   Receives heartbeat callbacks from `Heartbeats.Worker` instances.
 
-  Validates the Apollo callback protocol header, increments the per-id
-  counter in `Heartbeats.CallbackStats`, and returns 204. The dashboard
-  (Phase 5) subscribes to the `"callbacks"` PubSub topic to render activity.
+  Validates the Apollo callback protocol header, then increments the row's
+  `callbacks_count` column via a single `Repo.update_all/3`. The dashboard
+  polls the DB on its 1s tick and renders the updated counts.
   """
 
   use HeartbeatsWeb, :controller
 
-  alias Heartbeats.CallbackStats
+  import Ecto.Query, warn: false
+
+  alias Heartbeats.{Repo, Subscription}
 
   @protocol_header "subscription-protocol"
   @expected_protocol "callback/1.0"
@@ -18,7 +20,11 @@ defmodule HeartbeatsWeb.CallbackController do
   def receive_heartbeat(conn, %{"id" => id}) do
     case get_req_header(conn, @protocol_header) do
       [@expected_protocol] ->
-        CallbackStats.record(id)
+        Repo.update_all(
+          from(s in Subscription, where: s.id == ^id),
+          inc: [callbacks_count: 1]
+        )
+
         send_resp(conn, :no_content, "")
 
       _other ->

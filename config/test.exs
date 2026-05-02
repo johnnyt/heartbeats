@@ -1,5 +1,17 @@
 import Config
 
+# Configure the test database. Each integration test runs in its own
+# transaction (Ecto.Adapters.SQL.Sandbox) so they don't see each other's
+# writes.
+config :heartbeats, Heartbeats.Repo,
+  username: System.get_env("PGUSER", "postgres"),
+  password: System.get_env("PGPASSWORD", "postgres"),
+  hostname: System.get_env("PGHOST", "localhost"),
+  database: "heartbeats_test#{System.get_env("MIX_TEST_PARTITION")}",
+  pool: Ecto.Adapters.SQL.Sandbox,
+  pool_size: System.schedulers_online() * 2,
+  show_sensitive_data_on_connection_error: true
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :heartbeats, HeartbeatsWeb.Endpoint,
