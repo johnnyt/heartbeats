@@ -1,4 +1,105 @@
-This is a web application written using the Phoenix web framework.
+This is **Heartbeats** — a Phoenix demo that visualizes how `libring`
+distributes long-running heartbeat processes across an Elixir cluster
+and how the cluster self-heals when nodes come and go. The point of the
+demo is the **placement + RPC** mechanics, not the heartbeat workload
+itself.
+
+For the full story, read `README.md`. For the multi-phase implementation
+history (every design decision, why-not alternatives, manual verification
+steps), read `PLAN.md`.
+
+## Heartbeats: working in this repo
+
+### Stack
+
+- Elixir 1.19 / OTP 28, pinned via `mise.toml`. Use `mise x -- mix ...` if
+  your shell PATH hasn't picked up the project's mise versions.
+- Phoenix 1.8, LiveView 1.1, Ecto/Postgres, libcluster (`LocalEpmd`),
+  libring (consistent hash), `:erpc` for cross-node calls, `:peer` for
+  multi-node tests, ex_quality for the umbrella check.
+
+### Local dev
+
+```sh
+mise install                     # one-time
+mix setup                        # deps + ecto.create + ecto.migrate + assets
+
+# Three terminals. Only `a` runs the dashboard; `b` and `c` are headless
+# cluster members (no HTTP listener — the endpoint child starts but
+# doesn't bind because we don't run `phx.server`).
+iex --name a@127.0.0.1 -S mix phx.server
+iex --name b@127.0.0.1 -S mix
+iex --name c@127.0.0.1 -S mix
+```
+
+Open <http://localhost:4100>. One tab is enough — the dashboard sees the
+whole cluster via `:erpc.multicall` + the shared Postgres.
+
+### Tests
+
+```sh
+mix test                         # unit + controller + LiveView, ~3s
+mix test --include cluster       # also the multi-node :peer tests, ~45s
+mix quality                      # full umbrella; do NOT pipe or truncate the output
+```
+
+### Project gotchas
+
+These came up repeatedly during development; flag them in PRs / CRs if
+you see them again:
+
+- **Use `--name`, not `--sname`** for clustered iex sessions on macOS.
+  `Cluster.Strategy.LocalEpmd` queries epmd by hostname; macOS short-name
+  resolution often fails. Always `iex --name x@127.0.0.1 -S mix`.
+- **Avoid ports 5000 and 7000** on macOS (AirPlay Receiver) and 4040
+  (ngrok inspector). This project uses **4100**. Verify with
+  `lsof -i :PORT` before introducing new dev ports.
+- **`mix quality` output is already terse** — every line is signal.
+  Don't pipe to `tail`/`head`/`grep`; show the full output.
+- **`mix quality.init`** (the ex_quality installer) is **interactive**.
+  Answer the prompts; don't try to run it non-interactively in a script.
+- **Cluster tests can't share an Ecto sandbox** — peers run on different
+  BEAM nodes and have their own connection pools. `ClusterCase` switches
+  the Repo to `:auto` mode in `setup_all` and disables libcluster on
+  peers (peers connect via `Node.connect/1` directly).
+- **Subscription IDs must match the URL path segment** in callback URLs.
+  `register_many/2` pre-generates the UXID and embeds it in the URL so
+  `CallbackController.receive_heartbeat/2` updates the right row.
+- **The dashboard's diff engine tracks assign values, not function
+  results.** Don't compute owner/callback values inside the HEEx
+  template — precompute into the assigns. (Lost an afternoon to this.)
+- **Forms inside a `:tick`-refreshing LiveView need `phx-update="ignore"`**
+  on the inputs container, otherwise the diff overwrites user-typed
+  values back to the static `value=` defaults.
+
+### Architecture cheat sheet
+
+| Module | Role |
+|---|---|
+| `Heartbeats.Ring` | Pure libring wrapper: `owner/1`, `members/0`, `cordon/1`, `uncordon/1` |
+| `Heartbeats.Placement` | Per-node GenServer + RPC target. Decides where workers run; auto-rebalances on `:nodeup`/`:nodedown` |
+| `Heartbeats.WorkerSupervisor` | DynamicSupervisor — owns the local heartbeat workers |
+| `Heartbeats.Worker` | Per-subscription GenServer; sends HTTP heartbeats; self-migrates on `:rebalance` if the ring owner changed |
+| `Heartbeats.Subscription` | Ecto schema (`id` UXID PK, `callback_url`, `interval_ms`, `verifier`, `callbacks_count`) |
+| `Heartbeats.Subscriptions` | Repo wrapper context |
+| `Heartbeats.Chaos` | `random_kill/0` — picks a random ring member, terminates its workers, schedules delayed re-adoption |
+| `Heartbeats.RollingDeploy` | GenServer driving cordon → drain → uncordon for each node in turn |
+| `Heartbeats.GracefulShutdown` | Last child in the supervision tree; SIGTERM-triggered drain |
+| `HeartbeatsWeb.ClusterLive` | Real-time dashboard at `/` |
+
+### Commit conventions
+
+Concise — one-line title + 4-6 bullets, no paragraphs per bullet. End with
+a one-line tests/coverage summary. The "why" goes in code comments and
+module docs (which survive longer than commit messages).
+
+---
+
+## Generic Phoenix scaffolded guidelines
+
+The rest of this file is the standard Phoenix 1.8 generated AGENTS.md.
+Most of it is good general advice; defer to the project-specific section
+above when they conflict.
 
 ## Project guidelines
 
