@@ -290,7 +290,7 @@ defmodule HeartbeatsWeb.ClusterLive do
             </button>
           </div>
           <p class="text-xs text-base-content/60">
-            <strong>Chaos</strong>: kills every worker on a random node, recovers in ~2.5s.<br/>
+            <strong>Chaos</strong>: kills every worker on a random node, recovers in ~2.5s.<br />
             <strong>Rolling Deploy</strong>: cordon → drain → uncordon, one node at a time.
           </p>
         </div>

@@ -60,7 +60,7 @@ nodes come and go.
 5. `Heartbeats.WorkerSupervisor` — DynamicSupervisor
 6. `Heartbeats.Placement` — RPC target; monitors `:net_kernel.monitor_nodes/1`; on `:nodeup`/`:nodedown` broadcasts `:rebalance` to its local workers
 7. `Heartbeats.RollingDeploy` — GenServer driving cordon/drain/uncordon sequences
-8. `HeartbeatsWeb.Endpoint`
+8. `HeartbeatsWeb.Endpoint` — child starts on every node, but only binds an HTTP listener when the BEAM was started via `mix phx.server`. Headless cluster members (`iex -S mix`) skip the listener naturally.
 9. `Heartbeats.GracefulShutdown` — last child; supervisors stop in reverse order, so its `terminate/2` runs first on shutdown and drains the node
 
 ---
@@ -168,12 +168,11 @@ correct node automatically.
 In three terminals, all three nodes should converge on the same picture.
 
 ```sh
-# T1
+# T1 — runs the dashboard
 iex --name a@127.0.0.1 -S mix phx.server
-# T2
-PORT=4101 iex --name b@127.0.0.1 -S mix phx.server
-# T3
-PORT=4102 iex --name c@127.0.0.1 -S mix phx.server
+# T2 / T3 — headless cluster members (no `phx.server`, no HTTP listener)
+iex --name b@127.0.0.1 -S mix
+iex --name c@127.0.0.1 -S mix
 ```
 
 - [x] On `a`, `Node.list()` returns `[:b@127.0.0.1, :c@127.0.0.1]`.
@@ -286,7 +285,7 @@ can count them.
 - [x] In the Phoenix log on the owner node, observe a heartbeat POST every ~1.8s (90% of 2000).
 - [x] In the Phoenix log on the receiver node (whichever has port 4100), observe `CallbackController.receive` being hit.
 - [x] `curl -XDELETE localhost:4100/api/subscriptions/demo1` returns 204; heartbeats stop.
-- [x] Register a subscription on node `a` (port 4100), but its ring owner is node `c` (port 4102). Confirm `c`'s log shows the heartbeat POSTs while `a`'s log doesn't.
+- [x] Register a subscription on node `a` whose ring owner is node `c`. Confirm `c`'s log shows the heartbeat POSTs (the worker is on `c`) while the callback lands on `a`'s `CallbackController` (the only node serving HTTP).
 
 🛑 **PAUSE — wait for confirmation that manual verification passed before starting Phase 5.**
 
@@ -323,7 +322,7 @@ is the part that sells the demo.
 
 ### Manual verification
 
-- [x] Open `localhost:4100`, `:4101`, `:4102` in three browser tabs.
+- [x] Open `localhost:4100` in one browser tab. (Only node `a` runs the dashboard; `b` and `c` are headless cluster members and don't serve HTTP.)
 - [x] All three show 3 nodes, 0 subscriptions.
 - [x] Click "Spawn 100 subscriptions" on any tab. All three tabs update within ~1s to show ~33 workers per node.
 - [x] Heartbeat counters climb visibly.
@@ -513,13 +512,13 @@ Three terminals as before — but first `mix ecto.create && mix ecto.migrate`
 once.
 
 ```sh
-iex --name a@127.0.0.1 -S mix phx.server
-PORT=4101 iex --name b@127.0.0.1 -S mix phx.server
-PORT=4102 iex --name c@127.0.0.1 -S mix phx.server
+iex --name a@127.0.0.1 -S mix phx.server     # dashboard + HTTP
+iex --name b@127.0.0.1 -S mix                # headless cluster member
+iex --name c@127.0.0.1 -S mix                # headless cluster member
 ```
 
 - [x] All three nodes connect to the same DB; spawning subs from any node
-      shows up immediately in every tab.
+      shows up in the single dashboard tab within ~1s.
 - [x] The header `N callbacks received` and the sum of per-node `callbacks`
       always match (in lockstep at every 1-second refresh).
 - [x] **Sudden death** of node `c@`: surviving nodes adopt orphans within
