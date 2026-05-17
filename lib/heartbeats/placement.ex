@@ -13,6 +13,16 @@ defmodule Heartbeats.Placement do
   schedules a debounced `do_rebalance_local/0` pass which iterates the
   Subscriptions ETS, adopts subs the ring now assigns to us, and tells local
   workers whose owner has changed to migrate themselves.
+
+  Rebalance happens in two phases so the dashboard can animate it:
+
+    1. **Plan + announce** — compute the migrate-off list, broadcast
+       `{:placement, :leaving, sub_id, from, to}` per sub on `"placement"`,
+       then wait `@rebalance_yellow_ms` so the audience can see the
+       "about to move" highlight.
+    2. **Apply** — actually call `WorkerSupervisor.start_worker/1` for
+       adoptions and `send(pid, :rebalance)` for migrate-offs, broadcasting
+       `{:placement, :arrived, sub_id, to_node}` per sub.
   """
 
   use GenServer
@@ -21,10 +31,17 @@ defmodule Heartbeats.Placement do
 
   alias Heartbeats.{Ring, Subscription, Subscriptions, Worker, WorkerSupervisor}
 
+  @placement_topic "placement"
+
   # Coalesces a flurry of :nodeup/:nodedown events into a single rebalance
   # pass, and gives libring's own monitor_nodes hook a moment to update the
   # ring before we read from it.
   @rebalance_debounce_ms 250
+
+  # How long the "about to move" (yellow) highlight is visible before we
+  # actually migrate workers. Slows rebalance for visual clarity in the demo.
+  # Overridable via `config :heartbeats, :rebalance_yellow_ms` (tests set 0).
+  @rebalance_yellow_ms_default 3_000
 
   ## Public API
 
@@ -98,7 +115,7 @@ defmodule Heartbeats.Placement do
   @impl true
   def init(_opts) do
     :net_kernel.monitor_nodes(true, node_type: :visible)
-    {:ok, %{rebalance_timer: nil}}
+    {:ok, %{rebalance_timer: nil, pending_apply: nil}}
   end
 
   @impl true
@@ -113,8 +130,7 @@ defmodule Heartbeats.Placement do
 
   @impl true
   def handle_cast(:rebalance_local, state) do
-    do_rebalance_local()
-    {:noreply, state}
+    {:noreply, plan_and_announce(state)}
   end
 
   @impl true
@@ -127,8 +143,12 @@ defmodule Heartbeats.Placement do
   end
 
   def handle_info(:do_rebalance, state) do
-    do_rebalance_local()
-    {:noreply, %{state | rebalance_timer: nil}}
+    {:noreply, plan_and_announce(%{state | rebalance_timer: nil})}
+  end
+
+  def handle_info({:apply_rebalance, plan}, state) do
+    apply_plan(plan)
+    {:noreply, %{state | pending_apply: nil}}
   end
 
   ## Helpers
@@ -139,9 +159,77 @@ defmodule Heartbeats.Placement do
     %{state | rebalance_timer: new_timer}
   end
 
-  defp do_rebalance_local do
-    {migrated_in, migrated_out} =
-      Enum.reduce(Subscriptions.all(), {0, 0}, &reconcile_subscription/2)
+  defp plan_and_announce(state) do
+    plan = build_plan()
+
+    # Announce the yellow ("leaving") phase before workers actually move.
+    for {sub, _pid, to_node} <- plan.migrate do
+      broadcast({:placement, :leaving, sub.id, node(), to_node})
+    end
+
+    if plan.adopt == [] and plan.migrate == [] do
+      state
+    else
+      if is_reference(state.pending_apply), do: Process.cancel_timer(state.pending_apply)
+      ref = Process.send_after(self(), {:apply_rebalance, plan}, yellow_ms())
+      %{state | pending_apply: ref}
+    end
+  end
+
+  defp yellow_ms do
+    Application.get_env(:heartbeats, :rebalance_yellow_ms, @rebalance_yellow_ms_default)
+  end
+
+  defp build_plan do
+    Enum.reduce(Subscriptions.all(), %{adopt: [], migrate: []}, fn sub, acc ->
+      case {Ring.owner(sub.id), Worker.whereis(sub.id)} do
+        # Owner is us; no local worker yet → adopt.
+        {owner, nil} when owner == node() ->
+          %{acc | adopt: [sub | acc.adopt]}
+
+        # Owner is us and worker is here; nothing to do.
+        {owner, pid} when owner == node() and is_pid(pid) ->
+          acc
+
+        # Owner is someone else but worker is here → ask it to migrate.
+        {to_node, pid} when is_pid(pid) and is_atom(to_node) ->
+          %{acc | migrate: [{sub, pid, to_node} | acc.migrate]}
+
+        # Owner is someone else and we have no worker; not our problem.
+        _other ->
+          acc
+      end
+    end)
+  end
+
+  defp apply_plan(plan) do
+    migrated_in =
+      Enum.count(plan.adopt, fn sub ->
+        case WorkerSupervisor.start_worker(sub) do
+          {:ok, _pid} ->
+            broadcast({:placement, :arrived, sub.id, node()})
+            true
+
+          {:error, {:already_started, _pid}} ->
+            # A peer's migration beat us to it; the worker is here either way.
+            broadcast({:placement, :arrived, sub.id, node()})
+            true
+
+          _other ->
+            false
+        end
+      end)
+
+    migrated_out =
+      Enum.count(plan.migrate, fn {sub, pid, to_node} ->
+        if Process.alive?(pid) do
+          send(pid, :rebalance)
+          broadcast({:placement, :arrived, sub.id, to_node})
+          true
+        else
+          false
+        end
+      end)
 
     if migrated_in + migrated_out > 0 do
       Logger.info("rebalance on #{node()}: adopted=#{migrated_in} migrated_off=#{migrated_out}")
@@ -156,32 +244,8 @@ defmodule Heartbeats.Placement do
     :ok
   end
 
-  defp reconcile_subscription(sub, {in_count, out_count}) do
-    case {Ring.owner(sub.id), Worker.whereis(sub.id)} do
-      # Owner is us; no local worker yet → adopt.
-      {owner, nil} when owner == node() ->
-        {in_count + adopt_count(sub), out_count}
-
-      # Owner is us and worker is here; nothing to do.
-      {owner, pid} when owner == node() and is_pid(pid) ->
-        {in_count, out_count}
-
-      # Owner is someone else but worker is here → ask it to migrate.
-      {_other, pid} when is_pid(pid) ->
-        send(pid, :rebalance)
-        {in_count, out_count + 1}
-
-      # Owner is someone else and we have no worker; not our problem.
-      _other ->
-        {in_count, out_count}
-    end
-  end
-
-  defp adopt_count(sub) do
-    case WorkerSupervisor.start_worker(sub) do
-      {:ok, _pid} -> 1
-      _other -> 0
-    end
+  defp broadcast(event) do
+    Phoenix.PubSub.broadcast(Heartbeats.PubSub, @placement_topic, event)
   end
 
   defp stop_local_worker(subscription_id) do

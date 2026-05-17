@@ -37,9 +37,11 @@ defmodule Heartbeats.RollingDeploy do
   @drain_timeout_ms 5_000
   @drain_poll_ms 100
   # Visible pause between phases so an audience can read each banner.
+  # Sized to outlast the dashboard's blue "arrived" highlight (3s TTL) so
+  # rows fully fade back to neutral before the next node is cordoned.
   # Total deploy for N nodes ≈ N × (@cordoned_pause_ms + @uncordoned_pause_ms + drain time).
-  @cordoned_pause_ms 2_500
-  @uncordoned_pause_ms 2_500
+  @cordoned_pause_ms 3_500
+  @uncordoned_pause_ms 3_500
 
   ## Public API
 

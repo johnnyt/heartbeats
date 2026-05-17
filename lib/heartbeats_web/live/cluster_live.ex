@@ -32,12 +32,17 @@ defmodule HeartbeatsWeb.ClusterLive do
   @rpc_timeout_ms 500
   @max_spawn 500
 
+  # How long a yellow ("leaving") or blue ("arrived") highlight stays on a
+  # subscription row before fading. Yellow matches Placement's pre-move pause.
+  @highlight_ttl_ms 3_000
+
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "subscriptions")
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "deploy")
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "chaos")
+      Phoenix.PubSub.subscribe(Heartbeats.PubSub, "placement")
       Process.send_after(self(), :tick, @refresh_ms)
     end
 
@@ -46,17 +51,34 @@ defmodule HeartbeatsWeb.ClusterLive do
      |> assign(:max_spawn, @max_spawn)
      |> assign(:deploy_state, :idle)
      |> assign(:chaos_state, :idle)
+     |> assign(:highlights, %{})
      |> refresh_state()}
   end
 
   @impl true
   def handle_info(:tick, socket) do
     Process.send_after(self(), :tick, @refresh_ms)
-    {:noreply, refresh_state(socket)}
+    {:noreply, socket |> expire_highlights() |> refresh_state()}
   end
 
   def handle_info({:put, _sub}, socket), do: {:noreply, refresh_state(socket)}
   def handle_info({:delete, _id}, socket), do: {:noreply, refresh_state(socket)}
+
+  ## Placement (rebalance highlight) lifecycle
+
+  def handle_info({:placement, :leaving, sub_id, from_node, _to_node}, socket) do
+    {:noreply,
+     socket
+     |> put_highlight(sub_id, :yellow, from_node)
+     |> refresh_state()}
+  end
+
+  def handle_info({:placement, :arrived, sub_id, to_node}, socket) do
+    {:noreply,
+     socket
+     |> put_highlight(sub_id, :blue, to_node)
+     |> refresh_state()}
+  end
 
   ## Rolling deploy lifecycle
 
@@ -224,6 +246,7 @@ defmodule HeartbeatsWeb.ClusterLive do
                   <span class={[
                     "badge",
                     n.status == :live && "badge-success",
+                    n.status == :cordoned && "badge-warning",
                     n.status == :unreachable && "badge-error"
                   ]}>
                     {n.status}
@@ -235,78 +258,67 @@ defmodule HeartbeatsWeb.ClusterLive do
         </div>
       </section>
 
-      <section class="grid grid-cols-3 gap-4">
-        <form phx-submit="spawn" class="card bg-base-200 p-4 space-y-3">
-          <h3 class="font-semibold">Spawn subscriptions</h3>
-          <%!-- phx-update="ignore" prevents LiveView's diff from overwriting
-                user-typed values when the page re-renders on :tick. --%>
-          <div id="spawn-form-fields" phx-update="ignore" class="flex flex-wrap gap-2 items-end">
-            <label class="form-control">
-              <span class="label-text text-xs">Count</span>
-              <input
-                type="number"
-                name="count"
-                value="10"
-                min="1"
-                max={@max_spawn}
-                class="input input-bordered input-sm w-20"
-              />
-            </label>
-            <label class="form-control">
-              <span class="label-text text-xs">Interval (s)</span>
-              <input
-                type="number"
-                name="interval_seconds"
-                value="5"
-                min="1"
-                step="1"
-                class="input input-bordered input-sm w-20"
-              />
-            </label>
-            <button type="submit" class="btn btn-primary btn-sm">Spawn</button>
-          </div>
-          <p class="text-xs text-base-content/60">
-            Capped at {@max_spawn}. Each subscription POSTs to <code>/api/callbacks/&lt;id&gt;</code>
-            on the owner node.
-          </p>
-        </form>
+      <section class="card bg-base-200 p-3">
+        <div class="flex flex-wrap items-end gap-x-6 gap-y-2">
+          <form phx-submit="spawn" class="flex items-end gap-2">
+            <%!-- phx-update="ignore" prevents LiveView's diff from overwriting
+                  user-typed values when the page re-renders on :tick. --%>
+            <div id="spawn-form-fields" phx-update="ignore" class="flex items-end gap-2">
+              <label class="form-control">
+                <span class="label-text text-xs">Count</span>
+                <input
+                  type="number"
+                  name="count"
+                  value="10"
+                  min="1"
+                  max={@max_spawn}
+                  class="input input-bordered input-sm w-20"
+                />
+              </label>
+              <label class="form-control">
+                <span class="label-text text-xs">Interval (s)</span>
+                <input
+                  type="number"
+                  name="interval_seconds"
+                  value="5"
+                  min="1"
+                  step="1"
+                  class="input input-bordered input-sm w-20"
+                />
+              </label>
+              <button type="submit" class="btn btn-primary btn-sm">Spawn</button>
+            </div>
+          </form>
 
-        <div class="card bg-base-200 p-4 space-y-3">
-          <h3 class="font-semibold">Demo controls</h3>
-          <div class="flex flex-wrap gap-2">
-            <button
-              phx-click="inject_chaos"
-              disabled={@chaos_state != :idle}
-              class="btn btn-error btn-sm"
-            >
-              Inject Chaos
-            </button>
-            <button
-              phx-click="rolling_deploy"
-              disabled={@deploy_state != :idle}
-              class="btn btn-accent btn-sm"
-            >
-              Rolling Deploy
-            </button>
-          </div>
-          <p class="text-xs text-base-content/60">
-            <strong>Chaos</strong>: kills every worker on a random node, recovers in ~2.5s.<br />
-            <strong>Rolling Deploy</strong>: cordon → drain → uncordon, one node at a time.
-          </p>
-        </div>
+          <div class="divider divider-horizontal mx-0"></div>
 
-        <div class="card bg-base-200 p-4 space-y-3">
-          <h3 class="font-semibold">Reset</h3>
+          <button
+            phx-click="inject_chaos"
+            disabled={@chaos_state != :idle}
+            class="btn btn-error btn-sm"
+            title="Kills every worker on a random node, recovers in ~2.5s."
+          >
+            Inject Chaos
+          </button>
+          <button
+            phx-click="rolling_deploy"
+            disabled={@deploy_state != :idle}
+            class="btn btn-accent btn-sm"
+            title="Cordon → drain → uncordon, one node at a time."
+          >
+            Rolling Deploy
+          </button>
+
+          <div class="divider divider-horizontal mx-0"></div>
+
           <button
             phx-click="clear_all"
             class="btn btn-warning btn-sm"
             data-confirm="Unregister every subscription?"
+            title="Stops every worker on every node and empties the subscriptions table."
           >
-            Clear all subscriptions
+            Clear all
           </button>
-          <p class="text-xs text-base-content/60">
-            Stops every worker on every node and empties the subscriptions table.
-          </p>
         </div>
       </section>
 
@@ -339,7 +351,14 @@ defmodule HeartbeatsWeb.ClusterLive do
                       </tr>
                     </thead>
                     <tbody>
-                      <tr :for={s <- Map.get(@subs_by_node, n.node, [])} id={"sub-#{s.id}"}>
+                      <tr
+                        :for={s <- Map.get(@subs_by_node, n.node, [])}
+                        id={"sub-#{s.id}"}
+                        class={[
+                          "transition-colors duration-500",
+                          highlight_class(@highlights, s.id)
+                        ]}
+                      >
                         <td class="font-mono text-xs truncate" title={s.id}>{s.id}</td>
                         <td class="text-right">{format_interval(s.interval_ms)}</td>
                         <td class="text-right">{s.callbacks}</td>
@@ -368,12 +387,18 @@ defmodule HeartbeatsWeb.ClusterLive do
 
   defp refresh_state(socket) do
     members = Ring.members()
-    stats_by_node = fetch_all_stats(members)
+    member_set = MapSet.new(members)
+    visible = Enum.uniq([Node.self() | Node.list()])
+    # Include cordoned-but-connected nodes so subs leaving them are still
+    # rendered (yellow phase) on a visible card.
+    all_nodes = Enum.uniq(members ++ visible)
+    stats_by_node = fetch_all_stats(all_nodes)
     raw_subs = Heartbeats.list()
+    highlights = socket.assigns[:highlights] || %{}
 
     subscriptions = Enum.map(raw_subs, &build_sub_view/1)
-    {by_node, unassigned} = group_subs(subscriptions, members)
-    nodes = Enum.map(members, &node_summary(&1, stats_by_node, by_node))
+    {by_node, unassigned} = group_subs(subscriptions, member_set, highlights)
+    nodes = Enum.map(all_nodes, &node_summary(&1, stats_by_node, by_node, member_set))
     total_callbacks = Enum.reduce(subscriptions, 0, fn s, acc -> acc + s.callbacks end)
 
     socket
@@ -394,13 +419,16 @@ defmodule HeartbeatsWeb.ClusterLive do
     }
   end
 
-  defp group_subs(subscriptions, members) do
-    member_set = MapSet.new(members)
-
+  # During a yellow ("leaving") highlight, render the sub at its OLD owner
+  # so the audience sees "this is about to move" before the worker actually
+  # migrates. Blue and unhighlighted subs use their current ring owner.
+  defp group_subs(subscriptions, _member_set, highlights) do
     subscriptions
     |> Enum.reduce({%{}, []}, fn sub, {by_node, unassigned} ->
-      if sub.owner != nil and MapSet.member?(member_set, sub.owner) do
-        {Map.update(by_node, sub.owner, [sub], &(&1 ++ [sub])), unassigned}
+      display_node = display_owner(sub, highlights)
+
+      if display_node != nil do
+        {Map.update(by_node, display_node, [sub], &(&1 ++ [sub])), unassigned}
       else
         {by_node, [sub | unassigned]}
       end
@@ -408,11 +436,22 @@ defmodule HeartbeatsWeb.ClusterLive do
     |> then(fn {by_node, unassigned} -> {by_node, Enum.reverse(unassigned)} end)
   end
 
-  defp node_summary(n, stats_by_node, subs_by_node) do
+  defp display_owner(sub, highlights) do
+    case Map.get(highlights, sub.id) do
+      %{state: :yellow, display_node: node} -> node
+      _ -> sub.owner
+    end
+  end
+
+  defp node_summary(n, stats_by_node, subs_by_node, member_set) do
+    in_ring? = MapSet.member?(member_set, n)
+
     {worker_count, status} =
       case Map.get(stats_by_node, n) do
-        {:ok, %{worker_count: count}} -> {count, :live}
-        _other -> {0, :unreachable}
+        {:ok, %{worker_count: count}} when in_ring? -> {count, :live}
+        {:ok, %{worker_count: count}} -> {count, :cordoned}
+        _other when in_ring? -> {0, :unreachable}
+        _other -> {0, :cordoned}
       end
 
     callbacks =
@@ -447,4 +486,38 @@ defmodule HeartbeatsWeb.ClusterLive do
 
   defp format_interval(ms) when ms >= 1_000, do: "#{div(ms, 1_000)}s"
   defp format_interval(ms), do: "#{ms}ms"
+
+  ## Highlight management
+
+  defp put_highlight(socket, sub_id, state, display_node) do
+    expires_at = System.monotonic_time(:millisecond) + @highlight_ttl_ms
+
+    highlights =
+      Map.put(socket.assigns.highlights, sub_id, %{
+        state: state,
+        display_node: display_node,
+        expires_at: expires_at
+      })
+
+    assign(socket, :highlights, highlights)
+  end
+
+  defp expire_highlights(socket) do
+    now = System.monotonic_time(:millisecond)
+
+    highlights =
+      socket.assigns.highlights
+      |> Enum.reject(fn {_id, %{expires_at: t}} -> t <= now end)
+      |> Map.new()
+
+    assign(socket, :highlights, highlights)
+  end
+
+  defp highlight_class(highlights, sub_id) do
+    case Map.get(highlights, sub_id) do
+      %{state: :yellow} -> "bg-warning/30"
+      %{state: :blue} -> "bg-info/30"
+      _ -> ""
+    end
+  end
 end

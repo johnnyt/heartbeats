@@ -26,6 +26,10 @@ config :logger, level: :error
 # Keep the graceful-shutdown drain loop snappy in tests.
 config :heartbeats, :drain_timeout_ms, 200
 
+# Skip the demo "yellow before move" pause in tests so rebalance stays
+# near-instant. Production/dev use the 3s default for visual clarity.
+config :heartbeats, :rebalance_yellow_ms, 0
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 
