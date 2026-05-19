@@ -233,10 +233,6 @@ This is a **teaching POC**. It deliberately doesn't ship with:
 - A persistent subscription source (the local Phoenix endpoint plays both
   registrant and callback receiver)
 
-For a production-shaped version of the same pattern with Postgres CDC,
-gRPC, observability, and Apollo Router integration, see the sibling
-`graphql-subscriptions` project at Bill.
-
 ## License
 
 MIT.
