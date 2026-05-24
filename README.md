@@ -18,8 +18,6 @@ the cross-node `:erpc` routing, and the cordon/drain orchestration.
   ring + RPC.
 - **Rolling deploy**: cordon → drain → uncordon, one node at a time, with
   zero dropped subscriptions during the rotation.
-- **Chaos**: brutally terminate every worker on a random node, watch the
-  cluster recover.
 
 ## Stack
 
@@ -81,18 +79,7 @@ Bigger demo: spawn 100 at 2s. Or via `iex`:
 Heartbeats.register_many(100, %{interval_ms: 2_000})
 ```
 
-### 2. Inject Chaos
-
-Click **Inject Chaos**. A random node is picked; every worker on it is
-terminated. A red banner appears for ~2.5s while the cluster recovers, then
-the worker count rebounds to its previous value as `Placement.rebalance_local`
-re-adopts the orphaned subscriptions on the same node.
-
-This demonstrates: workers are processes, processes can die, but the
-subscriptions don't go with them — they're rows in Postgres, and the
-placement layer notices the gap.
-
-### 3. Rolling Deploy
+### 2. Rolling Deploy
 
 Click **Rolling Deploy**. One node at a time:
 
@@ -146,8 +133,8 @@ config :libring,
 join or leave. We never call `add_node`/`remove_node` ourselves outside of
 the cordon/uncordon paths.
 
-That's it. Everything else (placement, rebalance, chaos recovery, rolling
-deploy) is built on top of these two primitives.
+That's it. Everything else (placement, rebalance, rolling deploy) is built
+on top of these two primitives.
 
 ## Architecture
 
@@ -187,7 +174,6 @@ Heartbeats.register/1
 | [`Heartbeats.Worker`](lib/heartbeats/worker.ex) | Per-subscription GenServer. Sends HTTP heartbeats; on `:rebalance` self-migrates if the ring owner changed |
 | [`Heartbeats.Subscription`](lib/heartbeats/subscription.ex) | Ecto schema — `id` (UXID), `callback_url`, `interval_ms`, `verifier`, `callbacks_count` |
 | [`Heartbeats.Subscriptions`](lib/heartbeats/subscriptions.ex) | Repo wrapper — `put/get/all/count/delete/purge_local` |
-| [`Heartbeats.Chaos`](lib/heartbeats/chaos.ex) | `random_kill/0` picks a random ring member and terminates its workers; visible recovery delay |
 | [`Heartbeats.RollingDeploy`](lib/heartbeats/rolling_deploy.ex) | GenServer driving cordon → drain → uncordon for each node in turn |
 | [`Heartbeats.GracefulShutdown`](lib/heartbeats/graceful_shutdown.ex) | Last child in the supervision tree; SIGTERM-triggered drain |
 | [`HeartbeatsWeb.ClusterLive`](lib/heartbeats_web/live/cluster_live.ex) | Real-time dashboard at `/` |

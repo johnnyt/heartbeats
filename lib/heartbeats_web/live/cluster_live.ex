@@ -16,7 +16,7 @@ defmodule HeartbeatsWeb.ClusterLive do
     * `"subscriptions"` — register/delete events trigger a refresh so the
       table updates immediately on user action (the 1s tick would catch up
       anyway).
-    * `"deploy"` and `"chaos"` — banner state for the demo controls.
+    * `"deploy"` — banner state for the rolling-deploy controls.
 
   Polls every second on a `:tick`. Subscription rows + callback counts come
   from a single `Heartbeats.list/0` query (Postgres is shared, so any node
@@ -26,7 +26,7 @@ defmodule HeartbeatsWeb.ClusterLive do
 
   use HeartbeatsWeb, :live_view
 
-  alias Heartbeats.{Chaos, Placement, Ring, RollingDeploy}
+  alias Heartbeats.{Placement, Ring, RollingDeploy}
 
   @refresh_ms 1_000
   @rpc_timeout_ms 500
@@ -41,7 +41,6 @@ defmodule HeartbeatsWeb.ClusterLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "subscriptions")
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "deploy")
-      Phoenix.PubSub.subscribe(Heartbeats.PubSub, "chaos")
       Phoenix.PubSub.subscribe(Heartbeats.PubSub, "placement")
       Process.send_after(self(), :tick, @refresh_ms)
     end
@@ -50,7 +49,6 @@ defmodule HeartbeatsWeb.ClusterLive do
      socket
      |> assign(:max_spawn, @max_spawn)
      |> assign(:deploy_state, :idle)
-     |> assign(:chaos_state, :idle)
      |> assign(:highlights, %{})
      |> refresh_state()}
   end
@@ -133,19 +131,6 @@ defmodule HeartbeatsWeb.ClusterLive do
      |> put_flash(:error, "Rolling deploy failed: #{inspect(reason)}")}
   end
 
-  ## Chaos events
-
-  def handle_info({:chaos, :killed, node, count}, socket) do
-    {:noreply, assign(socket, :chaos_state, %{node: node, count: count})}
-  end
-
-  def handle_info({:chaos, :recovered, node}, socket) do
-    case socket.assigns.chaos_state do
-      %{node: ^node} -> {:noreply, assign(socket, :chaos_state, :idle)}
-      _other -> {:noreply, socket}
-    end
-  end
-
   @impl true
   def handle_event("spawn", %{"count" => count_str, "interval_seconds" => seconds_str}, socket) do
     with {count, ""} when count > 0 <- Integer.parse(count_str || ""),
@@ -170,16 +155,6 @@ defmodule HeartbeatsWeb.ClusterLive do
      socket
      |> put_flash(:info, "Cleared all subscriptions across the cluster")
      |> refresh_state()}
-  end
-
-  def handle_event("inject_chaos", _params, socket) do
-    case Chaos.random_kill() do
-      {:ok, %{node: node, killed: killed}} ->
-        {:noreply, put_flash(socket, :info, "Killed #{killed} workers on #{node}")}
-
-      {:error, :no_nodes} ->
-        {:noreply, put_flash(socket, :error, "No nodes in the ring to chaos")}
-    end
   end
 
   def handle_event("rolling_deploy", _params, socket) do
@@ -213,15 +188,6 @@ defmodule HeartbeatsWeb.ClusterLive do
         <div class="alert alert-info">
           <span class="loading loading-spinner loading-sm"></span>
           <span>{@deploy_state.message}</span>
-        </div>
-      <% end %>
-
-      <%= if @chaos_state != :idle do %>
-        <div class="alert alert-error">
-          <span class="loading loading-spinner loading-sm"></span>
-          <span>
-            Chaos on <span class="font-mono">{@chaos_state.node}</span>: killed {@chaos_state.count} workers — recovering…
-          </span>
         </div>
       <% end %>
 
@@ -292,14 +258,6 @@ defmodule HeartbeatsWeb.ClusterLive do
 
           <div class="divider divider-horizontal mx-0"></div>
 
-          <button
-            phx-click="inject_chaos"
-            disabled={@chaos_state != :idle}
-            class="btn btn-error btn-sm"
-            title="Kills every worker on a random node, recovers in ~2.5s."
-          >
-            Inject Chaos
-          </button>
           <button
             phx-click="rolling_deploy"
             disabled={@deploy_state != :idle}

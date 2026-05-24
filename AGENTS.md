@@ -6,7 +6,8 @@ itself.
 
 For the full story, read `README.md`. For the multi-phase implementation
 history (every design decision, why-not alternatives, manual verification
-steps), read `PLAN.md`.
+steps), read `PLAN.md`. For current in-flight work (especially the
+conference talk slides), read `TODO.md`.
 
 ## Heartbeats: working in this repo
 
@@ -82,10 +83,82 @@ you see them again:
 | `Heartbeats.Worker` | Per-subscription GenServer; sends HTTP heartbeats; self-migrates on `:rebalance` if the ring owner changed |
 | `Heartbeats.Subscription` | Ecto schema (`id` UXID PK, `callback_url`, `interval_ms`, `verifier`, `callbacks_count`) |
 | `Heartbeats.Subscriptions` | Repo wrapper context |
-| `Heartbeats.Chaos` | `random_kill/0` — picks a random ring member, terminates its workers, schedules delayed re-adoption |
 | `Heartbeats.RollingDeploy` | GenServer driving cordon → drain → uncordon for each node in turn |
 | `Heartbeats.GracefulShutdown` | Last child in the supervision tree; SIGTERM-triggered drain |
 | `HeartbeatsWeb.ClusterLive` | Real-time dashboard at `/` |
+
+### Slides authoring
+
+The conference talk's slides live in `docs/slides/` (Slidev project). The
+companion outline (full storyboard, speaker notes, diagram specs) is
+`docs/talk-outline.md`. Current progress and pending work: `TODO.md` at
+the repo root.
+
+```sh
+cd docs/slides
+npm install                      # one-time
+npm run dev                      # http://localhost:3030
+npm run build                    # static site → dist/
+```
+
+Presenter mode lives at `http://localhost:3030/presenter`. There is no
+default `p` shortcut — open the URL directly.
+
+**Audience framing.** Elixir/BEAM folks, already bought in on the runtime.
+Don't justify Elixir; compare to *other Elixir patterns* (`:global`, Swarm,
+Horde) rather than other ecosystems.
+
+**Don't compare to libring before introducing it.** §2 ends on the genuine
+question "is the convergence window the right tradeoff?" *without* naming
+libring. The comparison slides (Diagram 3 + the tradeoffs slide) are parked
+in `docs/slides/HOLDING-BAY.md` and reinstate at the end of §4, after
+libring has been shown. Always check `HOLDING-BAY.md` when working on the
+section it targets.
+
+**Speaker notes.** Slidev renders HTML comments as presenter notes, but
+newlines collapse. Use `<br>` for visual line breaks inside `<!-- -->`
+blocks, and `<br><br>` for paragraph breaks. Within-paragraph soft wrap
+is fine — only break where you want a visual break.
+
+**Frontmatter trap.** A slide separator and a frontmatter opener are *both*
+`---` on their own line. Writing `---\n\n---\nclicks: 1\n---` in source
+creates a phantom "undefined" slide between the previous slide and the
+new one. Correct pattern:
+
+```
+(end of previous slide's content)
+
+---
+clicks: 1
+---
+
+# New slide title
+```
+
+The previous slide's `---` separator *is* the new slide's opening
+frontmatter `---` — same line.
+
+**Color vocabulary** (used consistently across all diagrams):
+
+- **Amber** (`rgb(251, 191, 36)`) — thesis, punchline, "the talk's beat"
+- **Emerald** (`rgb(52, 211, 153)`) — "what we want", deterministic success
+- **Rose** (`rgb(244, 63, 94)`) — failure mode, dead pid, broken state
+- **Violet/sky** — neutral tenant/process colors, no semantic weight
+- Slate for node bodies, light gray strokes for structural lines
+
+**Diagram viewBox sizing.** Slides are 16:9. Diagrams using `w-full h-auto`
+should keep viewBox aspect close to **800 × 460** (1.74) — taller will clip
+at the bottom of the slide. All current diagrams use this aspect.
+
+**Components.** Custom diagrams are Vue components under
+`docs/slides/components/` and are auto-imported by Slidev (use the
+`<ComponentName />` tag directly in slides). Animated diagrams take a
+`:clicks` prop and gate their state on it; the slide's frontmatter
+`clicks: N` declares how many click steps that slide has.
+
+**Style overrides.** Project-wide CSS overrides go in `docs/slides/style.css`
+(auto-loaded by Slidev). Currently used to hide the Goto dialog's stuck
+autocomplete list — see comments in the file.
 
 ### Commit conventions
 

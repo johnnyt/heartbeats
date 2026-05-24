@@ -88,32 +88,14 @@ defmodule HeartbeatsWeb.ClusterLiveTest do
       refute render(view) =~ "Uncordoning"
     end
 
-    test "chaos events show and clear the banner", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/")
-
-      Phoenix.PubSub.broadcast(
-        Heartbeats.PubSub,
-        "chaos",
-        {:chaos, :killed, :"a@127.0.0.1", 4}
-      )
-
-      html = render(view)
-      assert html =~ "Chaos on"
-      assert html =~ "killed 4 workers"
-
-      Phoenix.PubSub.broadcast(Heartbeats.PubSub, "chaos", {:chaos, :recovered, :"a@127.0.0.1"})
-      refute render(view) =~ "Chaos on"
-    end
-
-    test "inject_chaos with empty ring returns :no_nodes", %{conn: conn} do
+    test "rolling_deploy with empty ring doesn't crash", %{conn: conn} do
       Heartbeats.Ring.cordon(node())
       on_exit(fn -> Heartbeats.Ring.uncordon(node()) end)
 
       {:ok, view, _html} = live(conn, ~p"/")
 
       # The handler returns {:error, :no_nodes} — we just need to confirm
-      # it doesn't crash the LiveView. Same for rolling_deploy.
-      _html = render_click(view, "inject_chaos")
+      # it doesn't crash the LiveView.
       _html = render_click(view, "rolling_deploy")
       assert Process.alive?(view.pid)
     end

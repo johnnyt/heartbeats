@@ -1,0 +1,8 @@
+/* Slidev's Goto dialog (press `g` to open) slides off-screen via a negative
+   top class when closed, but its autocomplete result list extends below the
+   input and stays visible — covering slide content in the top-right corner.
+   Force the whole dialog hidden unless it's in the "shown" position. */
+#slidev-goto-dialog:not(.top-5) {
+  visibility: hidden;
+  pointer-events: none;
+}

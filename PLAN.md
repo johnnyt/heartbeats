@@ -4,6 +4,12 @@ A Phoenix demo that visualizes how `libring` distributes long-running heartbeat
 processes evenly across an Elixir cluster, and how the cluster self-heals when
 nodes come and go.
 
+> **Note (post-implementation):** the **Chaos** feature described in Phase 6
+> below was later removed — the rolling deploy demo and scale-up/down events
+> showcase the same membership-churn property without needing a separate
+> "chaos" branded button. Hard-killing a node via `Ctrl-C, a` in `iex` is
+> still the visceral demo for `:nodedown` recovery in the talk.
+
 ## Decisions locked in
 
 - **Naming**: split the sibling project's `HeartbeatScheduler` into a pure
