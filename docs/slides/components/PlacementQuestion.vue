@@ -23,11 +23,11 @@ const nodeLabels = ['a@', 'b@', 'c@', 'd@']
 
 <template>
   <div class="placement-question">
-    <svg viewBox="0 0 800 460" class="w-full h-auto" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="0 0 800 340" class="w-full h-auto" xmlns="http://www.w3.org/2000/svg">
       <!-- ===== Twin-question state (clouds + arrows + two ?s) ===== -->
       <g :class="['twin-state', { gone: (clicks ?? 0) >= 1 }]">
         <!-- "register?" cloud, top-left -->
-        <g transform="translate(80, 30)">
+        <g transform="translate(80, 10)">
           <path
             d="M 20,40 Q 0,40 0,25 Q 0,10 20,10 Q 25,-2 45,0 Q 65,-2 75,10 Q 100,10 100,25 Q 100,40 80,40 Z"
             class="cloud"
@@ -36,16 +36,16 @@ const nodeLabels = ['a@', 'b@', 'c@', 'd@']
         </g>
         <!-- Arrow from register cloud -->
         <path
-          d="M 165,75 Q 200,160 300,260"
+          d="M 165,55 Q 200,115 290,175"
           class="arrow"
           marker-end="url(#arrowhead)"
           fill="none"
         />
         <!-- Pulsing ? near arrow midpoint -->
-        <text x="215" y="170" text-anchor="middle" class="q-mark pulse">?</text>
+        <text x="215" y="115" text-anchor="middle" class="q-mark pulse">?</text>
 
         <!-- "talk to me?" cloud, top-right -->
-        <g transform="translate(610, 30)">
+        <g transform="translate(610, 10)">
           <path
             d="M 20,40 Q 0,40 0,25 Q 0,10 20,10 Q 25,-2 45,0 Q 65,-2 75,10 Q 100,10 100,25 Q 100,40 80,40 Z"
             class="cloud"
@@ -54,34 +54,34 @@ const nodeLabels = ['a@', 'b@', 'c@', 'd@']
         </g>
         <!-- Arrow from talk-to-me cloud -->
         <path
-          d="M 635,75 Q 600,160 500,260"
+          d="M 635,55 Q 600,115 510,175"
           class="arrow"
           marker-end="url(#arrowhead)"
           fill="none"
         />
         <!-- Pulsing ? near arrow midpoint -->
-        <text x="585" y="170" text-anchor="middle" class="q-mark pulse">?</text>
+        <text x="585" y="115" text-anchor="middle" class="q-mark pulse">?</text>
       </g>
 
       <!-- ===== Single-? state (after click) ===== -->
       <g :class="['single-state', { shown: (clicks ?? 0) >= 1 }]">
-        <text x="400" y="160" text-anchor="middle" class="q-mark q-mark-lg">?</text>
-        <text x="400" y="200" text-anchor="middle" class="placement-label">placement</text>
+        <text x="400" y="100" text-anchor="middle" class="q-mark q-mark-lg">?</text>
+        <text x="400" y="140" text-anchor="middle" class="placement-label">placement</text>
       </g>
 
       <!-- ===== Cluster (always visible) ===== -->
-      <g class="cluster" transform="translate(80, 290)">
+      <g class="cluster" transform="translate(80, 190)">
         <g
           v-for="(workers, i) in workersPerNode"
           :key="i"
           :transform="`translate(${i * 180}, 0)`"
         >
-          <!-- Node body -->
-          <rect x="0" y="0" width="140" height="130" rx="10" class="node-body" />
+          <!-- Node body — slightly shorter for the tighter viewBox -->
+          <rect x="0" y="0" width="140" height="120" rx="10" class="node-body" />
           <!-- Top stripe -->
           <rect x="0" y="0" width="140" height="6" rx="3" class="node-stripe" />
           <!-- Worker dots -->
-          <g transform="translate(70, 70)">
+          <g transform="translate(70, 60)">
             <circle
               v-for="(t, j) in workers"
               :key="j"
@@ -93,7 +93,7 @@ const nodeLabels = ['a@', 'b@', 'c@', 'd@']
             />
           </g>
           <!-- Node label -->
-          <text x="70" y="123" text-anchor="middle" class="node-label">{{ nodeLabels[i] }}</text>
+          <text x="70" y="112" text-anchor="middle" class="node-label">{{ nodeLabels[i] }}</text>
         </g>
       </g>
 

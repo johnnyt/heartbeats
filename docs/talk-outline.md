@@ -1,22 +1,29 @@
 # Spreading Long-Running Workloads Across an Elixir Cluster
-*A story about consistent hashing, `:erpc`, and zero-downtime deploys*
+*Cluster membership, `:erpc`, and consistent hashing — the BEAM primitives, by example.*
 
-**Total: ~45 min.** Audience: Elixir/BEAM folks, already bought in on the
+**Total: ~43 min.** Audience: Elixir/BEAM folks, already bought in on the
 runtime. We assume shared OTP intuition (processes, supervision, message
 passing, `Node`/`:erpc`) and don't justify Elixir as a choice — the audience
-already made it. The comparison points are *other Elixir patterns* for this
-problem (`:global`, Horde, Swarm), not other ecosystems. The Heartbeats demo is
-**woven through** sections 3–6, not held to the end.
+already made it. This is a **teaching talk**: the goal is for the audience to
+leave with a richer mental model of what the runtime *gives* them at the
+cluster level, and to see one example (consistent-hashing placement via
+libring) of composing those primitives into something useful. Prior-art
+libraries (`:global`, Swarm, Horde) get a brief, respectful acknowledgement —
+not a head-to-head. The Heartbeats demo is **woven through** sections 3–6.
 
 ---
 
-## Section 1 — The Problem (5 min)
+## Section 1 — The Problem (6 min)
 
-**Goal:** anchor the audience in a concrete workload before we look at solutions.
+**Goal:** make the audience *feel* why placement matters before we touch a
+single line of cluster code. The htop image does the work that abstract
+bullet points won't.
 
-- Define the workload: **N long-running GenServers that each need a home** —
-  Absinthe subscription heartbeats, Phoenix Channel sockets, per-tenant
-  pollers, log tailers, "one worker per X" anything.
+### 1a. The shape of the workload
+
+- **N long-running GenServers that each need a home** — Absinthe subscription
+  heartbeats, Phoenix Channel sockets, per-tenant pollers, log tailers, "one
+  worker per X" anything.
 - Properties that make placement hard:
   - **Stateful** — round-robin at the LB doesn't help; the *process* is the
     state.
@@ -24,18 +31,43 @@ problem (`:global`, Horde, Swarm), not other ecosystems. The Heartbeats demo is
     milliseconds a task takes.
   - **Membership churn is the steady state, not an exception.** Nodes leave
     (deploys, autoscaling, crashes) and join (scale-up, restarts) constantly.
-    Whatever places workers has to redistribute on every one of those events
-    without dropping work.
-- The two questions every BEAM-native solution must answer:
-  1. **Which node runs the GenServer for key X?**
-  2. **How does any other node send it a message?**
-- Both questions reduce to one: ***placement.*** Once you can answer "who owns
-  X," `:erpc` (or a `{name, node}` send) handles the rest — that's the next
-  35 minutes.
 
-> **Speaker notes:** Quick show of hands — "who's reached for Horde? For
-> `:global`? For Swarm? For a homegrown registry on top of `:pg`?" Calibrates
-> the room and seeds Section 2. Don't dwell — 90 seconds max on the survey.
+### 1b. The "one big node" failure mode
+
+This is the new spine of §1. Show it before any solution.
+
+🖼️ **Image 1 — "One core red, seven idle"**
+- Real htop screenshot (or a faithful mock) of an 8-core box where one core is
+  pegged at 100% (red bar, the runaway process) and the other seven are
+  barely flickering at 2–5%.
+- Caption underneath: ***"the workload is here. the capacity is over there."***
+
+What's wrong with this picture — narrate over the image:
+
+- **Resource waste.** You bought 8 cores and you're using 1. The other 7 are
+  cooling the room.
+- **Vertical-scale ceiling.** When that one core saturates, your only lever is
+  a bigger box. You hit physics fast.
+- **Head-of-line blocking.** Every tenant queues behind every other tenant's
+  work on the same scheduler.
+- **GC pauses are everyone's problem.** A heap blip on the busy node stalls
+  every subscription it's hosting.
+- **Blast radius = "everything".** That node dies (deploy, OOM, hardware) —
+  every subscription dies with it. There's no surviving partial state to
+  reconnect to.
+
+> **Speaker notes:** Stay on the image. The room has all seen this picture in
+> their own dashboards. Let it sit. The next 35 minutes are the answer to
+> *"what would I rather see here?"* — and you'll show them that answer
+> literally, with a callback htop image in §5.
+
+### 1c. The two questions a cluster-native solution must answer
+
+- **Which node runs the GenServer for key X?**
+- **How does any other node send it a message?**
+
+Both reduce to one: ***placement.*** Once you can answer "who owns X," `:erpc`
+(or a `{name, node}` send) handles the rest — that's the next 35 minutes.
 
 📊 **Diagram 1 — "The placement question"**
 - Static frame: row of 4 nodes (matches the live demo cluster size), scattered
@@ -46,141 +78,132 @@ problem (`:global`, Horde, Swarm), not other ecosystems. The Heartbeats demo is
   "?" centered over the cluster — emphasizes that both questions reduce to one:
   *placement.*
 
+> **Speaker notes:** This is the same `PlacementQuestion` component already in
+> the deck. The htop image is the *visceral* version of the same question;
+> Diagram 1 is the *abstract* version. They reinforce each other.
+
 ---
 
-## Section 2 — How We'd Solve This in Elixir Today (6 min)
+## Section 2 — Prior Art, Briefly (3 min)
 
-**Goal:** name the BEAM-native prior art so the libring solution feels earned,
-not magical. The audience is bought in on Elixir — they're not wondering "why
-not Kafka," they're wondering **"why not Horde?"** Answer that head-on.
+**Goal:** name what already exists in this space, give the room enough to
+calibrate, and move on. This is not a head-to-head. We're not justifying
+libring against Horde — we're teaching the underlying primitives, and these
+libraries are just other ways those primitives have been packaged.
 
-### 2a. The naïve cluster registry: `:global` (and Swarm, briefly)
+### 2a. `:global` — the runtime's built-in cluster registry
 
 ```elixir
 :global.register_name({:worker, sub_id}, self())
 :global.whereis_name({:worker, sub_id})
-#=> #PID<12345.678.0> or :undefined
 ```
 
-- Looks like the obvious answer: the runtime already tracks cluster membership,
-  let it track names too.
-- Where it falls down for *placement*:
-  - **No placement policy.** Whichever node calls `register_name/2` first owns
-    the name. Add a node and existing names don't redistribute — there *is* no
-    "~1/N moves" property; there's no movement at all.
-  - **Cluster-wide locking on register.** Every name registration is a full
-    mesh round-trip. Fine at 10 names, painful at 10k.
-  - **Netsplit conflict resolution kills processes by default.** When two
-    partitions heal and both have registered the same name, `:global`'s
-    default resolver exits one of them. Most teams meet this property in prod.
-- **Swarm** (one-liner): tried to fix this with handoff + an internal hash ring.
-  Largely unmaintained now — but worth naming so the room knows you know the
-  history. The ring is the *idea* Swarm got right; we're going to build directly
-  on it.
+- The runtime already tracks cluster membership; `:global` lets it track
+  names too.
+- One thing worth seeing once: under a netsplit, `:global`'s default
+  conflict resolver **kills one of the duplicate processes when the
+  partition heals.** Most teams meet this property in production.
 
-📊 **Diagram 2 — "`:global` register race"**
-- Three nodes A/B/C, each holding a `register({:worker, 42}, …)` envelope.
-- *Animation:* all three envelopes fly toward a shared "lock" in the center;
-  one wins, the other two return as `{:error, :already_registered}`.
-- *Second beat:* a lightning-bolt netsplit between A and {B,C}. Both sides
-  re-register `{:worker, 42}` locally. Heal the split → one of the two PIDs
-  flashes red and dies. Caption: ***"name uniqueness, by murder."***
+📊 **Diagram 2 — "Name uniqueness, by murder"** *(existing
+`GlobalRegisterRace` component — keep it; it's memorable and it's cheap)*
+- Three nodes around the shared `:global` lock; netsplit; both partitions
+  register the same name; heal; one pid gets a red strike.
 
-### 2b. Horde — distributed registry + supervisor
+> **Speaker notes:** This one slide earns its keep. Even people who've used
+> `:global` for years often haven't met the netsplit behavior. After this,
+> we move on — we are *not* spending five minutes on it.
 
-```elixir
-Horde.DynamicSupervisor.start_child(MySup, {Worker, sub})
-Horde.Registry.lookup(MyRegistry, sub.id)
-```
+### 2b. Swarm and Horde — frameworks built on top
 
-- Built explicitly for "distributed supervisor that rebalances on membership
-  change." This is the mental model the audience is already running — don't
-  dodge it.
-- What Horde gives you:
-  - Auto-rebalance on `:nodeup`/`:nodedown`.
-  - Cluster-wide name registry with handoff.
-  - Process state hand-off hooks on migration.
+One slide, two bullets:
 
-> **Speaker notes:** Establish that Horde is a real, well-built library
-> doing real work. Don't compare to anything yet — describe it on its own
-> terms. The audience will form opinions about its tradeoffs once we explain
-> the mechanics.
+- **Swarm** — handoff + an internal hash ring. Largely unmaintained, but its
+  *idea* (place workers on a ring) is the one we'll build directly.
+- **Horde** — distributed supervisor + CRDT-replicated registry. Actively
+  maintained, real production usage. Owns the distribution lifecycle for you;
+  good fit when you don't have a natural hash key or want explicit handoff
+  hooks.
 
-### 2c. How does Horde know who owns what?
-
-The audience knows Elixir but not necessarily CRDTs. One slide of mechanics
-before we look at consequences:
-
-- **Each node holds its own copy of the registry.** Local read, no
-  round-trip.
-- **Updates gossip between nodes via delta-CRDTs.** Powered by the
-  `DeltaCrdt` library. Each node sends only what changed.
-- **All copies converge — eventually.** Milliseconds in a healthy cluster;
-  longer under load or partition.
-
-> **Speaker notes:** Land "eventually is not zero" hard — that's the seed
-> for the next slide. If anyone's never seen a CRDT, this level of detail is
-> enough; they don't need the math.
-
-### 2d. What happens during convergence?
-
-This is the heavyweight slide of §2 — give it a beat.
-
-- **Two nodes can disagree about ownership.** Before gossip lands, node A
-  thinks it owns `sub-42`; node C also thinks it owns `sub-42`. Both start
-  workers.
-- **Two workers run for the same key** for the duration of the convergence
-  window — often milliseconds, occasionally longer.
-- **Horde resolves once gossip converges** — the CRDT picks a winner, the
-  other worker gets terminated. The Horde README is explicit about this.
-  Teams in production hit it.
-
-📊 **Diagram 2c — "`:global` register race"** *(already in the deck; ends §2a)*
-*The Horde-vs-libring side-by-side diagram now lives at the end of §4 —
-the audience needs to see the ring before the comparison can land.*
-
-### 2e. Is the convergence window the right tradeoff?
-
-- For workloads that need **cluster-wide uniqueness guarantees** — clearly
-  yes. Horde is the right tool.
-- For workloads where a brief duplicate during a netsplit is *unacceptable* —
-  we can ask the runtime for less, and do more locally.
-
-> **Speaker notes:** This is the honest close to §2. We're not comparing to
-> the alternative yet — that comes after §4, once the audience knows what
-> the alternative *is*. "Ask the runtime for less, do more locally" is the
-> thesis of §3–§6 in one phrase.
+> **Speaker notes:** Be respectful and brief. Some of these maintainers are
+> in the room. The point is acknowledgement, not comparison. *"These exist.
+> They're built on the same runtime primitives we're about to look at. Today
+> we're going to learn the primitives directly, and use libring as one
+> example of composing them."*
 
 ---
 
-## Section 3 — The Elixir Primitives (8 min, *demo woven in*)
+## Section 3 — The Elixir Primitives (10 min, *demo woven in*)
 
-**Goal:** the two superpowers we'll compose. Most of the room knows OTP; we're
-framing the *cluster* as a first-class concept.
+**Goal:** the heart of the talk. The audience leaves this section knowing what
+the BEAM hands them for free at the cluster level, with code on screen for
+each. This is where we spend the time we saved by trimming §2.
 
 ### 3a. The cluster is a thing you can ask questions of
 
 ```elixir
 Node.self()        #=> :"a@127.0.0.1"
 Node.list()        #=> [:"b@127.0.0.1", :"c@127.0.0.1"]
+```
 
+- `Node.list()` is *not* a service-discovery API call. The runtime maintains
+  cluster membership; you're reading a **local data structure**.
+- That single fact is what makes everything downstream possible. Every node
+  can answer "who's in the cluster?" in nanoseconds, with no coordination.
+
+> **Speaker notes:** For folks coming from other ecosystems, "cluster
+> membership" usually means a Consul/etcd/ZK round-trip. The BEAM doesn't
+> work that way. This is the slide where that lands.
+
+### 3b. `libcluster` — the discovery layer
+
+```elixir
+config :libcluster,
+  topologies: [
+    heartbeats: [strategy: Cluster.Strategy.LocalEpmd]
+  ]
+```
+
+- One config block. `LocalEpmd` for the demo; `Kubernetes`, `Gossip`, or
+  `DNSPoll` in prod. No discovery code in your application.
+- libcluster handles the `Node.connect/1` calls. Once nodes are connected,
+  `Node.list()` is populated and everything else in the talk works.
+
+### 3c. `monitor_nodes` — the runtime tells you when membership changes
+
+```elixir
 :net_kernel.monitor_nodes(true)
+
 # inbox now receives:
 #   {:nodeup,   :"b@127.0.0.1"}
 #   {:nodedown, :"b@127.0.0.1"}
 ```
 
-- `libcluster` discovers peers — `LocalEpmd` for this demo,
-  `Kubernetes`/`Gossip`/`DNSPoll` in prod. One config block, no code.
-- `monitor_nodes/1` is the foundation for *automatic* rebalance later: any
-  GenServer can subscribe and react.
+Show a minimal GenServer skeleton — this is the pattern the audience will
+see used three more times before the talk ends:
 
-> **Speaker notes:** For the BEAM-curious in the room: `Node.list()` is *not*
-> a service-discovery API call. The runtime maintains the membership; you're
-> reading a local data structure. This is the difference that makes everything
-> else possible.
+```elixir
+defmodule MyApp.Watcher do
+  use GenServer
 
-### 3b. `:erpc` — calling code on another node
+  def init(state) do
+    :net_kernel.monitor_nodes(true)
+    {:ok, state}
+  end
+
+  def handle_info({:nodeup, node}, state)   do … end
+  def handle_info({:nodedown, node}, state) do … end
+end
+```
+
+- **Any GenServer can subscribe.** This is the foundation for automatic
+  rebalance — and the same primitive libring uses internally.
+- No registration ceremony. No callback hooks. Just messages in your inbox.
+
+> **Speaker notes:** This slide is doing setup for §4 and §5 simultaneously.
+> The audience will see this exact shape cash out twice in the next 15
+> minutes. Plant the pattern now.
+
+### 3d. `:erpc` — calling code on another node
 
 Build it up progressively. Switch to terminal *here* and run each line live.
 
@@ -202,9 +225,10 @@ Build it up progressively. Switch to terminal *here* and run each line live.
 #    {:ok, %{worker_count: 0, node: :"b@127.0.0.1"}},
 #    {:ok, %{worker_count: 0, node: :"c@127.0.0.1"}}]
 ```
-Then point at the **Nodes** card on the dashboard — note that this is *exactly*
-what `ClusterLive` does on every tick. The dashboard isn't talking to a
-service; it's calling a function on three BEAMs in parallel.
+
+Then point at the **Nodes** card on the dashboard — this is *exactly* what
+`ClusterLive` does on every tick. The dashboard isn't talking to a service;
+it's calling a function on three BEAMs in parallel.
 
 📊 **Diagram 4 — "`:erpc` in one frame"**
 - Two BEAM lozenges side by side, labeled `a@` and `b@`.
@@ -215,37 +239,47 @@ service; it's calling a function on three BEAMs in parallel.
 - Caption morph: **"no service discovery / no auth handshake / no JSON / no
   HTTP — just call a function."**
 
-### 3c. Naïve placement, and why it's not enough
+### 3e. (Aside) `:pg` exists too
+
+One bullet, one slide, move on:
+
+- `:pg` (process groups) is the other cluster primitive worth knowing —
+  publish/subscribe to a group across nodes. Not what we need today
+  (placement, not broadcast), but worth knowing it's there.
+
+### 3f. Naïve placement, and why it's not enough
 
 ```elixir
-Enum.random([node() | Node.list()])
+def place(%Subscription{id: id} = sub) do
+  owner = Enum.random([node() | Node.list()])
+  :erpc.call(owner, WorkerSupervisor, :start_worker, [sub])
+end
 ```
 
-- Works… until a node leaves. The other nodes have no way to compute "what was
-  on the dead one" without a registry — which means we just rebuilt the same
-  coordination problem we were trying to avoid.
-- We need a placement function that's **deterministic** (same key → same node)
-  and **stable** (one membership change → small reassignment).
+- Works… until a node leaves. The other nodes have no way to compute "what
+  was on the dead one" without a registry — and we don't want a registry.
+- We need a placement function that's **deterministic** (same key → same
+  node) and **stable** (one membership change → small reassignment).
 
-> **Speaker notes:** This is the pivot. We've earned the runtime mechanics; now
-> we need a *policy* for placement. Cue the ring.
+> **Speaker notes:** Cue the ring.
 
 ---
 
 ## Section 4 — Consistent Hashing & libring (7 min)
 
-**Goal:** picture-first explanation of consistent hashing, then libring as the
-four-line implementation.
+**Goal:** picture-first explanation of consistent hashing, then libring as
+the four-line implementation. No framework comparison — just teach the
+algorithm and show the code.
 
-### 4a. Naive hashing breaks under membership changes
+### 4a. Naive mod-N hashing breaks under membership changes
 
 ```elixir
-nodes = [node() | Node.list()]
 Enum.at(nodes, :erlang.phash2(id, length(nodes)))
 ```
 
+- Deterministic. Same key → same node. So far so good.
 - Add a 4th node → ~75% of items move. Every membership change = mass
-  migration.
+  migration. Deterministic, but not stable.
 
 📊 **Diagram 5 — "Mod-N reshuffle"**
 - Top: 3 columns (nodes), 12 colored dots distributed.
@@ -254,100 +288,74 @@ Enum.at(nodes, :erlang.phash2(id, length(nodes)))
 
 ### 4b. The ring
 
-📊 **Diagram 6 — "The hash ring"** *(centerpiece — full storyboard below)*
+📊 **Diagram 6 — "The hash ring"** *(centerpiece — six frames)*
 
-This diagram does the heaviest lifting in the talk. Build it in **six discrete
-frames**, each held long enough to narrate. Use a single canvas; transitions
-between frames are animated, not slide-cuts.
+The biggest visual in the deck. Build it in **six discrete frames**, each
+held long enough to narrate. Use a single canvas; transitions between frames
+are animated, not slide-cuts.
 
-**Visual conventions (consistent across all frames):**
-- Ring drawn as a thick gray circle, ~60% of the slide height.
-- Nodes are filled circles labeled `A`, `B`, `C` (and later `D`), each in a
-  distinct hue (A=indigo, B=teal, C=amber, D=rose).
+**Visual conventions:**
+- Ring drawn as a thick gray circle, ~60% of slide height.
+- Nodes are filled circles labeled `A`, `B`, `C` (and later `D`, `E`), each
+  in a distinct hue (A=indigo, B=teal, C=amber, D=rose, E=emerald).
 - Items are smaller dots, colorless until they "claim" an owner — then they
   inherit that owner's hue.
 - An "ownership arc" is a translucent wedge of the owner's color, swept from
-  the *previous* node clockwise to *that* node. This is the visual core of the
-  diagram: an item's color is the color of the arc it sits in.
+  the *previous* node clockwise to *that* node. An item's color is the color
+  of the arc it sits in.
 
 **Frame 1 — "Hash a key onto the ring."**
-- Empty ring with one node `A` at the 12 o'clock position.
-- A single item dot named `sub-42` flies in from off-canvas. A label appears:
-  `hash("sub-42") = 0x8a91…`. The dot lands at its hashed position on the
-  circumference (say 4 o'clock).
-- Narration: *"Every key — subscription id, tenant id, whatever — hashes to a
-  point on the ring."*
+- Empty ring with one node `A` at 12 o'clock.
+- One item dot `sub-42` flies in. Label: `hash("sub-42") = 0x8a91…`. Lands at
+  its hashed position (say 4 o'clock).
+- *"Every key — subscription id, tenant id, whatever — hashes to a point on
+  the ring."*
 
 **Frame 2 — "Walk clockwise to find the owner."**
-- A small arrow grows clockwise from `sub-42` along the ring until it hits
-  `A`. `sub-42` adopts A's indigo color.
-- Narration: *"Walk clockwise. First node you hit owns the key. With one node,
-  trivially everyone goes to A."*
+- A small arrow grows clockwise from `sub-42` until it hits `A`. `sub-42`
+  adopts A's indigo color.
+- *"Walk clockwise. First node you hit owns the key."*
 
 **Frame 3 — "Add nodes B, C, D; arcs appear."**
-- `B`, `C`, `D` fade in at 3, 6, and 9 o'clock.
-- Four translucent arcs sweep into existence, one per node, color-matched.
-- 15 more item dots rain in (16 total), each landing at its hashed position
-  and adopting the color of the arc it lands in. End state: ~4 items per node,
-  evenly distributed.
-- Counter widget appears in the corner: **"items: 16 · A:4 B:4 C:4 D:4"**.
-- Narration: *"With four nodes, each owns the arc clockwise of its
-  predecessor. Items inherit the arc's color."*
+- `B`, `C`, `D` fade in. Four translucent arcs sweep into existence.
+- 15 more items rain in (16 total). Each adopts the color of the arc it
+  lands in. ~4 items per node.
+- Counter: **"items: 16 · A:4 B:4 C:4 D:4"**.
 
 **Frame 4 — "Add a 5th node. Watch what moves."**
-- `E` fades in at, say, 1:30 — between `A` and `B`.
-- A new green arc sweeps in, **carved out of the existing indigo (A) arc**.
-  Items that fall inside the new green arc cross-fade from indigo → green with
-  a visible little jump-animation.
-- The other three arcs (B's teal, C's amber, D's rose) **don't change at all**
-  — visually call this out by *briefly desaturating them* during the
-  transition, then restoring.
-- Counter updates: **"reassigned: 1 / 16"**. Pin a callout next to it: ***"~1/N
-  moves. Compare: mod-N moved ~12/16."***
-- Narration: *"Adding E only steals from its clockwise neighbor's arc. Three
-  of the four existing nodes don't notice anything changed."*
+- `E` fades in between `A` and `B`. New emerald arc carved out of A's indigo.
+- Items in the new arc cross-fade indigo → emerald. The other three arcs
+  briefly desaturate to call out that they *don't change.*
+- Counter: **"reassigned: 1 / 16"**. Callout: ***"~1/N moves. Mod-N moved
+  ~12/16."***
 
 **Frame 5 — "Remove a node. Same property, in reverse."**
-- `B` fades out (simulating `:nodedown`). B's teal arc dissolves; the items
-  that were in it cross-fade to C's amber (their new clockwise neighbor).
-- A, D, and E arcs are untouched.
+- `B` fades out (`:nodedown`). B's teal arc dissolves; its items cross-fade
+  to C's amber. A, D, E arcs untouched.
 - Counter: **"reassigned: 4 / 16"**.
-- Narration: *"Same story on departure. Only the dead node's arc redistributes
-  — to a single neighbor."*
 
 **Frame 6 — "Zoom out: virtual nodes."**
-- The camera zooms out and the four node markers each **explode into ~128
-  small marks** scattered around the ring, color-coded to their owner.
-- The arcs become *interleaved confetti* of all four colors instead of four
-  big wedges.
-- Show the new item-distribution counter: still ~3 per node, but visibly
-  smoother under load.
-- Narration: *"Real ring libraries don't place each node once — they place each
-  node ~128 times around the ring as 'vnodes'. That's how the spread stays
-  even when you have wildly different numbers of items."*
+- Camera zooms out; each node marker explodes into ~128 small marks scattered
+  around the ring, color-coded to their owner.
+- The arcs become *interleaved confetti* of all colors instead of four big
+  wedges.
+- *"Real ring libraries place each node ~128 times around the ring as
+  'vnodes'. That's how the spread stays even — and when a node dies, its
+  load redistributes across **every** survivor, not just one neighbor."*
 
-> **Speaker notes (important — bridges to the live demo):** The "only neighbors
-> change" property is true for the *no-vnode* ring (Frames 1–5). With vnodes,
-> every real node has segments scattered all around the ring, so when a node
-> dies its load redistributes across **every** surviving node — but still only
-> ~1/N of items move in total. In the live demo you'll see all three survivors
-> pick up roughly equal slices of the dead node's work. That's vnodes earning
-> their keep — even spread is the trade for "single-neighbor" locality.
+> **Speaker notes:** The "only neighbors change" property is true for the
+> no-vnode ring (Frames 1–5). With vnodes, every real node has segments
+> scattered all around the ring, so a `:nodedown` redistributes across the
+> whole cluster — but still ~1/N total items move. The live demo in §5 will
+> show this directly: kill a node, watch all survivors take an even share.
 
-**Animation polish notes for design:**
-- Each frame transition should be **≤ 800ms**; the diagram should feel
-  *deliberate*, not flashy. Easing: `cubic-bezier(0.4, 0, 0.2, 1)`.
-- Item dots should have a tiny "settle" wiggle when they land on the ring —
-  enough to feel physical, not so much it's noisy.
-- The counter widget is the *secret weapon* — it converts the visual story into
-  a number the audience can quote later. Always show it; always update it
-  during a transition, not after.
-- Consider holding Frame 4 on screen while the speaker explicitly contrasts it
-  with the mod-N diagram (Diagram 5). A two-up "before/after" composite is a
-  nice optional 7th frame.
-- All color choices should pass WCAG AA against the slide background.
+### 4c. The two properties, one picture
 
-### 4c. libring in 4 lines
+- **Deterministic** — same key + same membership → same node, computed
+  locally on every node, with no coordination.
+- **Stable** — one membership change → ~1/N items move, not 75%.
+
+### 4d. libring in 4 lines
 
 ```elixir
 # config/config.exs
@@ -361,59 +369,26 @@ HashRing.Managed.key_to_node(:heartbeats, subscription_id)
 ```
 
 - `monitor_nodes: true` is the magic word. libring hooks
-  `:net_kernel.monitor_nodes/1` and updates the ring on `:nodeup`/`:nodedown`.
-  **You never write membership-tracking code.**
-- Show `Heartbeats.Ring` (`lib/heartbeats/ring.ex`) — it's a thin wrapper:
-  `owner/1`, `members/0`, `cordon/1`, `uncordon/1`. ~30 lines.
+  `:net_kernel.monitor_nodes/1` and updates the ring on `:nodeup` /
+  `:nodedown` for you.
+- That same primitive you saw in §3c, used internally by libring. **You
+  never write membership-tracking code** — but you've now seen the same
+  shape three times: a GenServer with `monitor_nodes(true)` in its init,
+  reacting to inbox messages.
+- Show `Heartbeats.Ring` (`lib/heartbeats/ring.ex`) — ~30 lines, four
+  functions: `owner/1`, `members/0`, `cordon/1`, `uncordon/1`. The
+  `cordon`/`uncordon` pair is the seed for §6.
 
-> **Speaker notes:** Land the `monitor_nodes: true` line hard — this is where
-> two primitives compose. libring leans on the runtime's `monitor_nodes`, so by
-> the time *your* code asks "who owns key X?", the ring is already correct for
-> current membership. There's no callback for *you* to wire.
-
-### 4d. Now — Horde vs. the ring
-
-Now that the audience has seen the ring, the comparison can land.
-
-📊 **Diagram 3 — "Horde vs. ring, side by side"** *(relocated from §2)*
-- Two-up layout. Left: Horde. Right: libring + `:erpc`.
-- **Left frame:**
-  - Box labeled `Horde.Registry` with a dashed CRDT-gossip cloud connecting
-    A↔B↔C.
-  - Two pulsing pids labeled `worker(sub-42)` — one on A, one on C —
-    rendered in yellow during the "convergence window."
-  - After a beat, the cloud thickens, one pid fades out. Caption:
-    ***"eventually consistent · convergence window = duplicate work."***
-- **Right frame:**
-  - Three nodes A/B/C with an identical ring drawn inside *each* node.
-  - `sub-42` hashes → arrow points to `B` from all three nodes simultaneously.
-  - Caption: ***"same membership in → same answer out. No gossip on the hot
-    path."***
-- The visual contrast — fuzzy cloud vs. three matching rings — does most of
-  the work.
-
-**The tradeoff statement, plainly:**
-- Horde is the right answer when you need **cluster-wide uniqueness
-  guarantees** and can tolerate the convergence window.
-- libring is the right answer when you want **deterministic placement** and
-  the workload tolerates a brief duplicate during a netsplit.
-- Two primitives, composed. That's the talk.
-
-> **Speaker notes:** Be respectful — Horde's maintainers are in this community,
-> and Horde is the right answer for its workloads. The point isn't "Horde is
-> wrong" — it's that decomposing the problem gives you something simpler for
-> the *placement* shape of it.
-
-> **Audience-bridge line:** "If you've reached for Horde and it worked — keep
-> using it. If the convergence window bit you, or you wanted to *see* the
-> placement decision in your code, the next 15 minutes are for you."
+> **Speaker notes:** The pedagogical payoff lands here. The audience saw
+> `monitor_nodes` as a primitive in §3, then sees libring using it as the
+> mechanism that keeps the ring in sync — same shape, no extra ceremony.
 
 ---
 
-## Section 5 — Putting It Together: Placement (6 min, *demo woven in*)
+## Section 5 — Putting It Together: Placement (7 min, *demo woven in*)
 
-**Goal:** show that the entire scheduler is three lines because the runtime did
-the rest.
+**Goal:** the scheduler is three lines because the primitives did the work.
+This is also where the htop callback pays off.
 
 ```elixir
 def place(%Subscription{id: id} = sub) do
@@ -425,8 +400,9 @@ end
 - **That's the scheduler.** No queue, no dispatcher, no coordinator.
 - Walk through `Heartbeats.Placement` (`lib/heartbeats/placement.ex`):
   - One GenServer per node, locally named.
-  - `init/1` calls `:net_kernel.monitor_nodes(true)`.
-  - On `:nodeup`/`:nodedown` → `rebalance_local/0`.
+  - `init/1` calls `:net_kernel.monitor_nodes(true)`. *(Fourth time the
+    audience has seen this shape. Call it out.)*
+  - On `:nodeup` / `:nodedown` → `rebalance_local/0`.
   - `rebalance_local/0`: for each local worker, re-ask the ring; if the owner
     changed, `:erpc.cast` the new owner and stop the local copy.
 
@@ -437,39 +413,38 @@ def handle_info({nodeevt, _node}, state) when nodeevt in [:nodeup, :nodedown] do
 end
 ```
 
-- The **Worker** opts into its own migration on `:rebalance`. Highlight this
-  as the BEAM-native pattern: each process is responsible for itself; no
-  central mover yanks workers around.
+- The **Worker** opts into its own migration on `:rebalance`. Each process is
+  responsible for itself; no central mover yanks workers around. That's the
+  BEAM-native shape.
 
-🖥️ **Live demo (~2 min) — scale down, then back up** *(start at 4 nodes: a, b, c, d)*
+🖥️ **Live demo (~2 min) — scale down, then back up** *(start at 4 nodes)*
 1. In the dashboard, click **Spawn** with 50 subscriptions @ 5s.
 2. Watch the **Subscriptions by node** cards even out (~12-13 per node).
-3. Stop node `d` (e.g., kill the running `iex` for `d@…`).
-   - `:nodedown` propagates; the ring redraws on every survivor.
+3. Stop node `d`.
+   - `:nodedown` propagates; ring redraws on every survivor.
    - Each survivor's count rebounds from ~12 → ~16 — *only ~1/4 of workers
-     actually moved.* That's the ring's stability property in action.
-4. Start node `d` back up (`iex --name d@... -S mix`).
-   - `:nodeup` propagates; the ring redraws on every node.
-   - Workers redistribute back toward ~12-13 each.
-5. Note the **callbacks received** counter never stops climbing.
+     actually moved.*
+4. Restart node `d`.
+   - `:nodeup` propagates; workers redistribute back toward ~12-13 each.
+5. The **callbacks received** counter never stops climbing.
 
-📊 **Diagram 7 — "`:nodedown` recovery"** — three frames, animated as a sequence
+🖼️ **Image 2 — "Eight cores, all working" (htop callback)**
+- Side-by-side with Image 1 from §1. Left: the original "one red core, seven
+  idle." Right: eight cores each at a healthy ~25–40%, no red.
+- Caption: ***"same workload. same cores. just placed."***
+- This is the visceral payoff of the whole talk. Hold it.
+
+📊 **Diagram 7 — "`:nodedown` recovery"** — three frames
 - *Frame 1:* 4 nodes A/B/C/D, workers as dots colored by ring zone.
-- *Frame 2:* node B vanishes (poof animation). Surviving nodes display a
-  pulsing `:nodedown` envelope flying in. Ring redraws: B's vnodes dissolve,
-  A/C/D each absorb a slice.
-- *Frame 3:* dotted arrows show orphaned workers being adopted on A, C, and D
-  (roughly evenly — vnodes again). Counter shows **total worker count:
-  unchanged · moved: ~1/4**.
-- *Animation note:* end on a slow cross-fade back to frame 1's color scheme but
-  on 3 nodes — emphasizes that the cluster is now in a new healthy state, not
-  a degraded one.
+- *Frame 2:* B vanishes. `:nodedown` envelopes fly in. Ring redraws: B's
+  vnodes dissolve; A/C/D each absorb a slice.
+- *Frame 3:* dotted arrows show orphaned workers being adopted on A, C, D
+  roughly evenly. Counter: **total worker count: unchanged · moved: ~1/4**.
 
-> **Speaker notes:** If the scale-down feels too fast in the room, run it
-> twice. The "boring" recovery *is* the punch line — there's no banner, no
-> incident, no on-call. The hard-kill in the deploy section (§6) shows the
-> same property under more violent conditions; this section shows it under
-> the everyday autoscaling case.
+> **Speaker notes:** If the htop callback feels too on-the-nose, trust it
+> anyway — the room remembers the §1 image. This is the moment the talk
+> resolves its own opening tension. The "boring" recovery *is* the punch
+> line.
 
 ---
 
@@ -480,23 +455,23 @@ end
 ```elixir
 def rolling_deploy(nodes) do
   for node <- nodes do
-    Ring.cordon(node)              # remove from ring on every node (:erpc fan-out)
+    Ring.cordon(node)              # remove from ring everywhere (:erpc fan-out)
     wait_until_drained(node)       # workers self-migrate; we just watch
-    Ring.uncordon(node)            # re-add; trigger rebalance_local on every node
+    Ring.uncordon(node)            # re-add; trigger rebalance_local everywhere
     Process.sleep(@settle_ms)
   end
 end
 ```
 
 - **Cordon** = remove from the ring everywhere. Workers on the cordoned node
-  see "I'm not the owner anymore" on their next `:rebalance` tick and `:erpc`
-  themselves to the new owner.
-- **Drain** = wait for the local worker count on that node to hit zero. *No*
-  central tracking; we're just polling `WorkerSupervisor`.
+  see "I'm not the owner anymore" on their next `:rebalance` tick and
+  `:erpc` themselves to the new owner.
+- **Drain** = wait for the local worker count to hit zero. *No* central
+  tracking; we're just polling `WorkerSupervisor`.
 - **Uncordon** = put it back. New work re-spreads naturally.
-- Show `Heartbeats.GracefulShutdown` — last child in the supervision tree, runs
-  cordon + drain in `terminate/2`. A `kubectl rollout restart` looks identical
-  to clicking the button.
+- `Heartbeats.GracefulShutdown` — last child in the supervision tree, runs
+  cordon + drain in `terminate/2`. A `kubectl rollout restart` looks
+  identical to clicking the dashboard button.
 
 🖥️ **Live demo (~2 min) — rolling deploy + hard kill** *(4-node cluster)*
 1. Click **Rolling Deploy**. Talk over the ~20s rotation:
@@ -505,47 +480,47 @@ end
    - "Watch the callbacks counter — that's the SLO."
 2. In one iex: `Ctrl-C, a` to hard-kill node D.
 3. `:nodedown` recovery in ~5s. Survivors pick up D's work.
-4. Restart D with `iex --name d@... -S mix` → `:nodeup` → workers redistribute.
+4. Restart D → `:nodeup` → workers redistribute.
 
 📊 **Diagram 8 — "Rolling deploy timeline"**
-- Gantt-style: 4 horizontal lanes (nodes A, B, C, D) over a ~20s timeline.
-- Each lane has colored bands: **active (green) / cordoned (yellow) / draining
-  (orange) / restarting (gray) / active (green)**.
-- A worker-count line graph runs underneath, summed across all live nodes.
-- *Animation:* the timeline plays from left to right. The summed worker-count
-  line is **flat the entire time** — that's the SLO promise. Highlight it on
-  each pass.
+- Gantt-style: 4 horizontal lanes (A, B, C, D) over ~20s.
+- Each lane has colored bands: **active (green) / cordoned (yellow) /
+  draining (orange) / restarting (gray) / active (green)**.
+- A worker-count line graph runs underneath, summed across live nodes.
+- *Animation:* timeline plays left to right. The summed worker-count line is
+  **flat the entire time** — that's the SLO promise.
 
-> **Speaker notes:** The graph staying flat is the whole talk in one image. If
-> you only get one slide right, this is it.
+> **Speaker notes:** The flat line is the whole talk in one image. If you
+> only get one slide right, this is it.
 
 ---
 
-## Section 7 — Caveats & When *Not* to Use This (3 min)
+## Section 7 — Caveats & When *Not* to Use This (2 min)
 
-Earn trust by being honest about boundaries.
+Earn trust by being honest about boundaries. Keep it short.
 
 - **Workers must be placeable anywhere.** Anything pinned to a node (local
   file, GPU, attached disk) breaks the model.
 - **Migration cost.** Workers in this demo are stateless between heartbeats;
   if yours have warm state, you need to checkpoint or accept a re-warm on
   migration.
-- **Flap windows.** If a node bounces (`:nodedown` → `:nodeup` in <1s), a
-  worker can move twice. Fine for most workloads; not for very expensive
-  warm-up.
-- **Cluster size.** Beautiful at 3–50 nodes. At 1000+ you'd want sharded rings
-  or a different model — every node holding the full ring stops being free.
-- **Membership view = ground truth.** libring is in-memory per node and assumes
-  everyone sees the same membership. Diverged views = diverged placement =
-  duplicate workers. Get your `libcluster` config right.
+- **Flap windows.** If a node bounces `:nodedown` → `:nodeup` in <1s, a
+  worker can move twice. Fine for most workloads; not for expensive warm-up.
+- **Cluster size.** Beautiful at 3–50 nodes. At 1000+ you'd want sharded
+  rings — every node holding the full ring stops being free.
+- **Membership view = ground truth.** libring assumes everyone sees the
+  same membership. Diverged views → diverged placement → duplicate workers.
+  Get your `libcluster` config right.
+- **No natural hash key?** Reach for Horde — its distribution model fits
+  better when any node can own the process.
 
 📊 **Diagram 9 — "When to use this"** *(optional, simple)*
 - Two columns: ✅ "Reach for this" / ⚠️ "Reach for something else."
 - ✅: long-lived stateful workers, per-tenant fan-out, WebSocket/subscription
   routing, heartbeating, sticky pollers.
 - ⚠️: short jobs (use a queue), heavy GPU/data-locality (use placement
-  constraints), 1000+ nodes (shard the ring), strict exactly-once (you need a
-  log).
+  constraints), 1000+ nodes (shard the ring), strict exactly-once (use Horde
+  or a log).
 
 ---
 
@@ -553,20 +528,20 @@ Earn trust by being honest about boundaries.
 
 - The whole scheduler is **~200 lines** because the runtime gave us cluster
   membership, monitoring, and `:erpc` for free.
-- Compared to the Horde model: no extra infrastructure, no external
-  coordination, fewer failure modes you have to model.
+- The shape you saw four times — a GenServer that calls
+  `:net_kernel.monitor_nodes(true)` and reacts to `:nodeup` / `:nodedown` —
+  is the entire "framework." There's no library between you and the runtime
+  when something goes wrong at 3am.
 - Repo: github link. Slides + diagrams: link.
 
 > **Speaker notes:** Close on the same image you opened with — the
 > workload-landing diagram — but now with the ring overlaid and `:erpc` arrows
-> showing the lookups. "These two primitives. That's the whole talk."
+> showing the lookups. *"These primitives. That's the whole talk."*
 
 📊 **Diagram 10 — "Closing image (callback to Diagram 1)"**
 - Re-show Diagram 1's nodes-and-workers, but with the ring from Diagram 6
-  overlaid translucently in the background and small `:erpc` arrows where the
-  question marks used to be.
-- *Animation:* the question marks from the opener fade in, then dissolve into
-  the ring + arrows. Lands the talk.
+  overlaid translucently and small `:erpc` arrows where the question marks
+  used to be.
 
 ---
 
@@ -574,13 +549,13 @@ Earn trust by being honest about boundaries.
 
 | Section | Time | Notes |
 |---|---:|---|
-| 1. Problem | 5 |  |
-| 2. Elixir alternatives (`:global`, Horde) | 6 |  |
-| 3. Primitives + first demo | 8 | demo: `:erpc.multicall` against the dashboard |
-| 4. libring + Horde comparison | 7 | comparison slide ends §4 |
-| 5. Placement + scale demo | 6 | demo: spawn 50, scale 4→3→4 |
-| 6. Zero-downtime + rolling demo | 6 | demo: rolling deploy + hard kill |
-| 7. Caveats | 3 |  |
+| 1. Problem + htop image | 6 | the "one red core" image lands here |
+| 2. Prior art, briefly | 3 | `:global` murder slide, one Swarm/Horde slide |
+| 3. Primitives + first demo | 10 | this is the headline section now |
+| 4. Consistent hashing + libring | 7 | no framework comparison |
+| 5. Placement + scale demo + htop callback | 7 | the second htop image pays off §1 |
+| 6. Zero-downtime + rolling demo | 6 |  |
+| 7. Caveats | 2 |  |
 | 8. Wrap | 2 |  |
 | **Subtotal** | **43** | |
 | Q&A buffer | (your slot) | |

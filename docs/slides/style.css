@@ -6,3 +6,55 @@
   visibility: hidden;
   pointer-events: none;
 }
+
+/* ---------------------------------------------------------------------
+   Larger base text
+   ---------------------------------------------------------------------
+   Slidev's seriph theme uses ~16px as the base; bump ~10% so body copy
+   and code blocks read more comfortably from the back of the room. Keep
+   tweaks proportional (em/rem) so existing utility classes still scale
+   correctly.
+*/
+
+.slidev-layout {
+  font-size: 1.1rem;        /* ~17.5px, up from 16px */
+  line-height: 1.55;
+}
+
+/* Headings — pull the H1 down slightly so the larger body doesn't crowd it */
+.slidev-layout h1 {
+  font-size: 2.4rem;
+  line-height: 1.15;
+}
+
+/* Shiki code blocks — Slidev defaults to a smaller size than body. Match
+   body and give it a touch more line-height so multi-line snippets breathe. */
+.slidev-layout pre.shiki,
+.slidev-layout pre.shiki code,
+.slidev-layout .slidev-code {
+  font-size: 1rem;          /* equals body em at the parent scale */
+  line-height: 1.55;
+}
+
+/* Inline `code` inside prose — keep at ~95% of body so it doesn't dominate */
+.slidev-layout :not(pre) > code {
+  font-size: 0.95em;
+  padding: 0.05em 0.35em;
+}
+
+/* Cap diagram SVG height so they can't overflow the slide canvas.
+   Components use `class="w-full h-auto"` which lets the SVG grow as tall
+   as its aspect ratio dictates — fine on wide displays, but with the
+   bumped H1 it can exceed the canvas vertical room. */
+.slidev-layout svg.w-full {
+  max-height: 72vh;
+}
+
+/* GracefulShutdown slide — the code block + two click-text blocks push the
+   bottom off-canvas at the bumped base font size. Shrink the code on this
+   slide only. */
+.graceful-shutdown-slide pre.shiki,
+.graceful-shutdown-slide pre.shiki code {
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
