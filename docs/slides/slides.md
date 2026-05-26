@@ -794,6 +794,38 @@ The dashboard isn't talking to a service. It's calling a function on three BEAMs
 
 ---
 
+# Same idea, OTP-flavored
+
+```elixir
+# General-purpose RPC primitive:
+:erpc.call(remote_node, Mod, :fun, [args])
+
+# OTP-flavored — call a named GenServer on another node:
+GenServer.call({MyServer, remote_node}, {:place, sub})
+```
+
+<div v-click class="mt-6 text-base opacity-85 max-w-4xl leading-relaxed">
+
+Both ride Erlang distribution. The <code>{Mod, node}</code> form is more idiomatic when there's a registered GenServer waiting on the other side — which is how the Heartbeats codebase actually talks to <code>Placement</code> on a remote node.
+
+</div>
+
+<!--
+[Brief sibling-pattern aside before we move on to placement.]
+
+[Say:]
+"One quick aside. There's a second shape you'll see in Elixir code that does roughly the same thing as :erpc.call."
+
+[Walk through the two snippets — same idea, different shape.]
+
+[click]
+"Both ride Erlang distribution. The named-GenServer form is the OTP idiom when you have a registered process on the other side. Heartbeats uses this form internally for placement; the cast and multicall flavors still use :erpc directly."
+
+[Don't dwell. This is a footnote — we use erpc on the slides because it's the clearer primitive, but the codebase uses both. Advance.]
+-->
+
+---
+
 # Naïve placement
 
 <div class="mb-4 text-base opacity-85 max-w-4xl leading-relaxed">
