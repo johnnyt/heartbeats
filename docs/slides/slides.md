@@ -806,7 +806,7 @@ GenServer.call({MyServer, remote_node}, {:place, sub})
 
 <div v-click class="mt-6 text-base opacity-85 max-w-4xl leading-relaxed">
 
-Both ride Erlang distribution. The <code>{Mod, node}</code> form is more idiomatic when there's a registered GenServer waiting on the other side — which is how the Heartbeats codebase actually talks to <code>Placement</code> on a remote node.
+Both ride Erlang distribution. The <code>\{Mod, node\}</code> form is more idiomatic when there's a registered GenServer waiting on the other side — which is how the Heartbeats codebase actually talks to <code>Placement</code> on a remote node.
 
 </div>
 
@@ -855,7 +855,7 @@ Works…
 
 <div class="mt-2 text-xl text-rose-400 font-semibold max-w-3xl">
 
-…until a node leaves. The other nodes have no way to compute <em>"what was on the dead one"</em> without a registry.
+…until a node leaves. The other nodes have no way to compute <em>"what was on the dead one"</em> without a cluster wide registry.
 
 </div>
 
@@ -883,7 +883,7 @@ And we don't want a registry. We want a placement <em>function</em>.
 [Brief pause — let the room think "yeah, okay."]
 
 [click]
-"…until a node leaves. The other nodes have no way to compute 'what was on the dead one' without a registry."
+"…until a node leaves. The other nodes have no way to compute 'what was on the dead one' without a cluster wide registry."
 
 [click]
 "And we don't want a registry. We want a placement function."
