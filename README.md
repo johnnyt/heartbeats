@@ -93,10 +93,13 @@ Click **Rolling Deploy**. One node at a time:
 Total worker count across surviving nodes stays constant. The "callbacks
 received" counter keeps climbing — no perceptible gap.
 
-This is what a real Kubernetes rolling restart looks like, just compressed
-into ~15 seconds.
+This is the in-place version of what a `kubectl rollout restart` triggers
+on a real Kubernetes cluster — same cordon → drain → rejoin lifecycle,
+just compressed into ~15 seconds. (In production each restarted pod is a
+new BEAM node; here we cycle the same one and call `uncordon` to bring it
+back into the ring.)
 
-### 4. Hard kill
+### 3. Hard kill
 
 In one of the iex sessions: `Ctrl-C, a` (or kill the BEAM externally).
 Surviving nodes detect `:nodedown`, libring removes the dead node from the
@@ -107,7 +110,7 @@ module's `terminate/2` fires *first* (it's the last child in the
 supervision tree), cordons the node, calls `rebalance_local/0`, and waits
 for workers to migrate off before the BEAM exits.
 
-### 5. Clear
+### 4. Clear
 
 Click **Clear all subscriptions**. Every node's worker count drops to 0,
 every Subscriptions row is deleted, every callback counter resets.
@@ -208,6 +211,24 @@ mix quality               # full umbrella: format, credo, dialyzer, tests, cover
 Multi-node tests use OTP's `:peer` (Phoenix tests use the standard sandbox;
 cluster tests switch the Repo to `:auto` mode in `setup_all` since peers
 on different BEAM nodes can't share a sandbox checkout).
+
+## Conference talk
+
+This demo backs a conference talk — *Spreading Long-Running Workloads
+Across an Elixir Cluster* — that walks through the same primitives
+(`Node.list`, `monitor_nodes`, `:erpc`, consistent hashing) by example.
+
+Slides live in [`docs/slides/`](docs/slides/) — Slidev deck. See its
+[README](docs/slides/README.md) for details.
+
+```sh
+cd docs/slides
+npm install
+npm run dev          # opens http://localhost:3030
+```
+
+Press `p` for presenter mode (notes + click-aligned cues) or `o` for the
+overview.
 
 ## Scope of this demo
 

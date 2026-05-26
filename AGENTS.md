@@ -4,10 +4,9 @@ and how the cluster self-heals when nodes come and go. The point of the
 demo is the **placement + RPC** mechanics, not the heartbeat workload
 itself.
 
-For the full story, read `README.md`. For the multi-phase implementation
-history (every design decision, why-not alternatives, manual verification
-steps), read `PLAN.md`. For current in-flight work (especially the
-conference talk slides), read `TODO.md`.
+For the full story, read `README.md`. The conference-talk slides live
+under `docs/slides/` — see their README and the speaker notes inside
+`docs/slides/slides.md` for the narrative arc.
 
 ## Heartbeats: working in this repo
 
@@ -89,10 +88,10 @@ you see them again:
 
 ### Slides authoring
 
-The conference talk's slides live in `docs/slides/` (Slidev project). The
-companion outline (full storyboard, speaker notes, diagram specs) is
-`docs/talk-outline.md`. Current progress and pending work: `TODO.md` at
-the repo root.
+The conference talk's slides live in `docs/slides/` (Slidev project).
+The deck (`slides.md`) is self-contained — Slidev speaker notes carry
+the full narration, click-by-click cues, demo scripts, and section
+budgets. Diagrams are Vue components in `docs/slides/components/`.
 
 ```sh
 cd docs/slides

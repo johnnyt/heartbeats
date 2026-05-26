@@ -1883,7 +1883,6 @@ class: text-center
 <div class="mt-8 text-xl opacity-80 space-y-2">
 
 <div>github.com/JohnnyT/heartbeats</div>
-<div>slides + diagrams: link</div>
 
 </div>
 

@@ -2,8 +2,6 @@
 
 [Slidev](https://sli.dev) deck for the talk *Spreading Long-Running Workloads Across an Elixir Cluster*.
 
-Outline source: [`../talk-outline.md`](../talk-outline.md).
-
 ## Run locally
 
 ```sh
