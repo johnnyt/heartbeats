@@ -28,9 +28,16 @@ fonts:
 </div>
 
 <!--
-Opening slide — name and repo on screen before they sit down.<br>
-Audience: Elixir folks, already bought in. We're not justifying the runtime.<br>
-This is a teaching talk: the goal is for the room to leave with a richer mental model of what the runtime gives them at the cluster level.
+[Pre-flight: mic check, demo cluster running, dashboard tab open, iex pre-staged for §3.]
+
+[As people settle, slide is up with name and repo URL. Don't start yet — give them a beat to read it.]
+
+[When ready:]
+"This is a talk about spreading long-running workloads across an Elixir cluster — by way of cluster membership, :erpc, and consistent hashing."
+
+[Brief pause, then advance.]
+
+[Budget: ~43 min talk + Q&A buffer.]
 -->
 
 ---
@@ -40,8 +47,12 @@ layout: section
 # 1. The Problem
 
 <!--
-6 minutes. Make them feel why placement matters before any solution.<br>
-The htop image is doing the heavy lifting here — abstract bullets won't.
+[Say:]
+"Section one — the problem. Before any solutions, let's anchor in why placement is hard."
+
+[Pause. Advance.]
+
+[Budget: ~6 min through end of §1.]
 -->
 
 ---
@@ -60,8 +71,33 @@ The htop image is doing the heavy lifting here — abstract bullets won't.
 </v-clicks>
 
 <!--
-Quick survey if it feels right: "who's reached for Horde? For :global? For Swarm?"<br>
-90 seconds max — calibrates the room.
+[Say:]
+"This talk is about long-running GenServers that each need a home. A few shapes that fit:"
+
+[Click through each, naming briefly. Don't dwell.]
+
+[click]
+Absinthe heartbeats — the workload that drives Heartbeats.
+
+[click]
+LLM chat sessions — per-conversation context.
+
+[click]
+Agent loops — tool-using agents holding state across turns.
+
+[click]
+Per-tenant pollers.
+
+[click]
+Log tailers.
+
+[click]
+"One worker per X" anything.
+
+[Optional show-of-hands, only if it feels right:]
+"Quick show of hands — who's reached for Horde for something like this? For :global? Swarm? A homegrown registry?"
+
+[90 seconds max. Move on.]
 -->
 
 ---
@@ -94,9 +130,19 @@ Quick survey if it feels right: "who's reached for Horde? For :global? For Swarm
 </div>
 
 <!--
-Each click adds one item. Don't rush — read the explanation aloud or paraphrase, then click.<br>
-The third bullet is doing real work — it's the lens for both the scale-up/down demo (§5) and the rolling deploy demo (§6).<br>
-When they see both demos behave the same way, they'll recognize it as the same property: membership churn → ring redistribution.
+[Open:]
+"Three properties make placement hard."
+
+[click]
+Stateful — talk about how the process IS the state (its mailbox, its heap). Contrast with a normal LB: it routes requests to any healthy backend. Here, the message has to land on the specific node running the specific process.
+
+[click]
+Long-lived — contrast 50ms web requests (placement is noise) vs hours-long subscriptions. Decisions stick across thousands of unrelated cluster events.
+
+[click]
+Membership churn — the third one carries the most weight. Talk about how churn is the steady state, not an exception: deploys, autoscaling, spot reclamation, OOMs, hardware. Each event triggers re-placement.
+
+[Pause after the third click. Let "outage every time AWS hiccups" land — it's the lens for the demos in §5 and §6.]
 -->
 
 ---
@@ -116,9 +162,12 @@ The workload is here. The capacity is over there.
 </div>
 
 <!--
-Stay on the image. The room has all seen this in their own dashboards.<br>
-Let it sit before you start narrating the risks on the next slide.<br>
-This image is the visceral version of "why placement matters" — and the §5 callback resolves it.
+[Silence for a beat — let the image land. Everyone in the room has seen this in their own dashboards.]
+
+[Then read the caption aloud, slowly:]
+"The workload is here. The capacity is over there."
+
+[Pause again. Don't pivot to the risks yet — that's the next slide. This image is the visceral version of the problem; §5 has the resolved version.]
 -->
 
 ---
@@ -176,10 +225,27 @@ The image is <em>cores on one box</em> — but the same shape plays out at the <
 </div>
 
 <!--
-Open by reading the bridge sentence aloud: "The image is cores on one box, but the same shape plays out at the cluster level." Otherwise the audience reads the htop picture and thinks we're talking about intra-box scheduling.<br>
-Five risks, each a click. Don't editorialize between them — let them stack.<br>
-The room will be nodding by the third one. The fifth is the one that hurts: there's no surviving partial state to reconnect to.<br>
-After this slide we pivot to the two questions a cluster-native solution must answer.
+[Read the bridge sentence aloud, slowly:]
+"The image is cores on one box — but the same shape plays out at the cluster level. One node carrying all the work, the rest idle. The risks are the same."
+
+[Pause. Make sure the framing transfers before clicking.]
+
+[click]
+Resource waste — paid for 8, using 1.
+
+[click]
+No horizontal headroom — more nodes don't help if work doesn't spread.
+
+[click]
+Head-of-line blocking — every tenant queued behind every other.
+
+[click]
+Hiccups stall everyone on that node — GC, memory pressure, network blips.
+
+[click]
+Blast radius — node dies, every subscription it was hosting dies.
+
+[The fifth is the one that hurts. Don't tack on commentary — let the silence land it. Then advance.]
 -->
 
 ---
@@ -191,16 +257,17 @@ clicks: 1
 <PlacementQuestion :clicks="$clicks" class="mt-4" />
 
 <!--
-This is the thesis of the whole talk, told visually.<br>
-<br>
-Before clicking, narrate the two clouds:<br>
-"A cluster-native solution has to answer two questions. One — which node runs the GenServer for key X? Two — how does any other node send it a message?"<br>
-<br>
-*click* — the two question marks dissolve into a single "?" labelled <strong>placement</strong>.<br>
-<br>
-"The first question IS placement. The second one falls out of it — once you know who owns X, the runtime makes sending a message trivial. The rest of the talk is teaching the primitives that answer that question."<br>
-<br>
-Don't name :erpc yet — §3 introduces it. Just gesture at "the runtime makes sending trivial" and let the click into §2 do the rest.
+[Before clicking, gesture at the two clouds and say:]
+"A cluster-native solution has to answer two questions. One: which node runs the GenServer for key X? Two: how does any other node send it a message?"
+
+[Pause briefly.]
+
+[click]
+"The first question IS placement. The second one falls out of it — once you know who owns X, the runtime makes sending a message trivial. The rest of the talk is the primitives that answer that question."
+
+[Pause. This is the thesis of the whole talk. Then advance into §2.]
+
+[Don't name :erpc yet — §3 introduces it. Just gesture at "the runtime makes sending trivial."]
 -->
 
 ---
@@ -214,8 +281,12 @@ layout: section
 </div>
 
 <!--
-3 minutes total. Not a head-to-head. We're not justifying libring against Horde — we're teaching the underlying primitives, and these libraries are other ways those primitives have been packaged.<br>
-Two slides: the :global murder slide (cheap and memorable), and one slide that names Swarm + Horde.
+[Say:]
+"Section two — the Elixir prior art for this problem, briefly. We're not comparing libraries today — we're going to learn the primitives underneath them."
+
+[Pause. Advance.]
+
+[Budget: ~3 min through end of §2. This section is deliberately short.]
 -->
 
 ---
@@ -249,8 +320,18 @@ One thing worth seeing once: under a netsplit, <code>:global</code>'s default co
 </v-click>
 
 <!--
-Set up the netsplit beat. Even people who've used :global for years often haven't met this behavior.<br>
-Next slide is the animation that makes it stick.
+[Say:]
+":global — the runtime ships with a built-in cluster registry."
+
+[Let them read the code for a beat.]
+
+[click]
+Talk about how :global lets the runtime track names alongside membership. It's the natural first reach for cross-node naming.
+
+[click]
+"One thing worth seeing once: when a netsplit heals, :global's default conflict resolver kills one of the duplicate processes. Most people who've used :global for years haven't met this behavior — the next slide shows it."
+
+[Advance.]
 -->
 
 ---
@@ -262,19 +343,23 @@ clicks: 3
 <GlobalRegisterRace :clicks="$clicks" class="mt-2" />
 
 <!--
-Click sequence:<br>
-0 — three nodes around the shared :global lock, three envelopes mid-flight<br>
-1 — race resolved: A wins, B and C get {:error, :already_registered}<br>
-2 — netsplit: lightning bolt, two partition locks, both register the same pid<br>
-3 — heal: one pid survives, one is killed (red strike), caption appears<br>
-<br>
-Narrate as you click:<br>
-"Three nodes try to register the same name simultaneously."<br>
-*click* "One wins. The others get an error. So far, so okay."<br>
-*click* "Now imagine a netsplit. Both partitions register locally — both succeed."<br>
-*click* "Heal the partition. :global notices the conflict and… exits one of them."<br>
-<br>
-After this slide we are DONE with :global. Move on.
+[Diagram tells the story; you narrate the beats.]
+
+[Say before clicking:]
+"Three nodes try to register the same name simultaneously."
+
+[click]
+"One wins. The others get an error. So far, so okay."
+
+[click]
+"Now imagine a netsplit. Both partitions register locally — both succeed."
+
+[click]
+"Heal the partition. :global notices the conflict and… exits one of them."
+
+[Brief pause for the punchline to land. Then advance.]
+
+[After this slide we're done with :global — don't loop back.]
 -->
 
 ---
@@ -308,9 +393,17 @@ These exist. They're built on the same runtime primitives we're about to look at
 </div>
 
 <!--
-Be respectful and brief. Some of these maintainers are in the room.<br>
-The point is acknowledgement, not comparison. Don't editorialize about tradeoffs.<br>
-The "we're going to learn the primitives directly" line is the pivot into §3 — say it with intent.
+[Read both columns aloud — they're short. Be respectful; some of these maintainers may be in the room.]
+
+[Say:]
+"Swarm — handoff plus an internal hash ring. Largely unmaintained, but the idea — placing workers on a ring — is the one we'll build directly."
+
+"Horde — distributed supervisor plus a CRDT-replicated registry. Actively maintained, real production usage. Owns the distribution lifecycle for you."
+
+[click]
+"These exist. They're built on the same runtime primitives we're about to look at. Today we're going to learn the primitives directly."
+
+[Say that last sentence with intent — it's the pivot into §3. Advance.]
 -->
 
 ---
@@ -324,8 +417,12 @@ layout: section
 </div>
 
 <!--
-10 minutes. The heart of the talk.<br>
-The audience leaves this section knowing what the BEAM hands them for free at the cluster level, with code on screen for each.
+[Say:]
+"Section three — the Elixir primitives. Three things the BEAM hands you for free: who's in the cluster, when that changes, and how to call a function on another node."
+
+[Pause. Advance.]
+
+[Budget: ~10 min through end of §3. The heart of the talk.]
 -->
 
 ---
@@ -339,7 +436,12 @@ layout: center
 </div>
 
 <!--
-First sub-section of §3. Lighter than the top-level section dividers — this is a "we're switching topics" cue, not a section break. Pause for a beat before clicking on.
+[Brief pause to register the topic switch.]
+
+[Say:]
+"Membership — who's in the cluster, right now?"
+
+[Advance.]
 -->
 
 ---
@@ -378,8 +480,18 @@ Every node answers in nanoseconds, with no coordination.
 </v-click>
 
 <!--
-The bridge sentence above the code is doing real work — without it, the audience reads the Erlang code and doesn't register why it's surprising.<br>
-This single fact (membership as local data) is what makes everything downstream possible.
+[Read the bridge sentence aloud, slowly:]
+"In most ecosystems, 'who's in the cluster?' is a network round-trip — Consul, etcd, ZooKeeper. On the BEAM, it's a function call."
+
+[Pause while they read the two lines of code.]
+
+[click]
+"Node.list isn't an API call. The runtime maintains the membership; you're reading a local data structure."
+
+[click]
+"Every node answers in nanoseconds, with no coordination."
+
+[Pause. Let "no coordination" land — this is the fact the next 30 minutes builds on.]
 -->
 
 ---
@@ -417,8 +529,18 @@ One config block. No discovery code in your app.
 </v-click>
 
 <!--
-libcluster handles the Node.connect/1 calls. Once nodes are connected, Node.list() is populated and everything else in the talk works.<br>
-We won't think about discovery again in this talk.
+[Say:]
+"libcluster — the discovery layer. One config block."
+
+[Let them read the config.]
+
+[click]
+"Swap LocalEpmd for Kubernetes, Gossip, or DNSPoll in prod."
+
+[click]
+"One config block. No discovery code in your app."
+
+[Move on — we don't think about discovery again in this talk.]
 -->
 
 ---
@@ -432,7 +554,12 @@ layout: center
 </div>
 
 <!--
-Second sub-section of §3. "Lifecycle" rather than "Monitoring" because the pattern (subscribe to runtime events, react in a GenServer) generalizes beyond monitor_nodes — trap_exit in §6 fits the same shape.
+[Brief pause.]
+
+[Say:]
+"Lifecycle — the runtime tells you when membership changes."
+
+[Advance.]
 -->
 
 ---
@@ -458,8 +585,15 @@ Any <code>GenServer</code> can subscribe. Just messages in your inbox — no reg
 </v-click>
 
 <!--
-This is the primitive that does the most work in the rest of the talk.<br>
-Don't dwell yet — the next slide shows the GenServer shape they'll see four more times.
+[Say:]
+"One line of Erlang turns this on."
+
+[Let them read the code. Walk through the inbox messages briefly.]
+
+[click]
+"Any GenServer can subscribe. Just messages in your inbox — no registration ceremony, no callback hooks."
+
+[Don't dwell — the next slide shows the GenServer shape they'll see again.]
 -->
 
 ---
@@ -501,8 +635,18 @@ libring uses this shape internally. <code>Placement</code> uses it in §5. Same 
 </v-click>
 
 <!--
-Plant the pattern now. The audience will see this exact shape in §5 (Placement) on a slide, and we'll reference libring using it internally in §4.<br>
-By the time they see it in §5, they should recognize it as "the BEAM-native shape for cluster-aware code."
+[Read the title aloud:]
+"This is the shape you'll see again — twice more, actually."
+
+[Walk through the code briefly: init calls monitor_nodes, handle_info catches :nodeup / :nodedown.]
+
+[click]
+"That's the entire 'framework' for reacting to cluster membership."
+
+[click]
+"libring uses this shape internally. Placement uses it in §5. Same primitive doing the same job."
+
+[Plant the pattern — they'll recognize it when it returns.]
 -->
 
 ---
@@ -516,7 +660,12 @@ layout: center
 </div>
 
 <!--
-Third sub-section of §3. Frame it as "RPC" rather than ":erpc" so the audience hears it as a category (vs gRPC, Twirp, Thrift, etc.) before they see the Elixir-specific API. The gRPC contrast click reveal lands harder this way.
+[Brief pause.]
+
+[Say:]
+"RPC — call a function on another node. You've seen this idea before — gRPC, Twirp, whatever. The BEAM's version is going to look surprisingly small."
+
+[Advance.]
 -->
 
 ---
@@ -528,14 +677,19 @@ clicks: 3
 <ErpcInOneFrame :clicks="$clicks" class="mt-2" />
 
 <!--
-Click 0: two BEAM lozenges side by side, idle. a@ on the left (indigo stripe), b@ on the right (teal stripe).<br>
-Click 1: amber call arrow appears from a@ → b@ along the top, labeled <code>:erpc.call(b, Mod, :fun, [arg])</code>.<br>
-Click 2: b@ runs the function — small spinner appears inside b@, b@'s label flashes amber.<br>
-Click 3: emerald return arrow appears from b@ → a@ along the bottom, labeled <code>{:ok, value}</code>. Caption fades in: "no service discovery · no auth handshake · no JSON · no HTTP — just call a function."<br>
-<br>
-Narrate: "Two BEAMs." *click* "Call a function on the other one." *click* "It runs there." *click* "You get the value back. That's it. No HTTP, no JSON, no service mesh — just call a function."<br>
-<br>
-The caption is the punchline — let it land on the final click.
+[Say:]
+"Two BEAMs."
+
+[click]
+"Call a function on the other one."
+
+[click]
+"It runs there."
+
+[click]
+"You get the value back. That's it. No HTTP, no JSON, no service mesh — just call a function."
+
+[Let the punchline land. Then advance.]
 -->
 
 ---
@@ -572,10 +726,19 @@ Compare this to gRPC or any other RPC framework you've used. No <code>.proto</co
 </div>
 
 <!--
-The gRPC comparison lands hard for folks who've spent days wiring up service contracts. Don't list the missing pieces too quickly — let each absence register.<br>
-Build up progressively. Each click adds a variant.<br>
-You will switch to terminal soon to run multicall live — flag that here so the audience is ready.<br>
-The three variants matter for later: call (place a worker), cast (fire a rebalance), multicall (dashboard tick).
+[Say:]
+"Three variants — same shape. Call: synchronous. Returns a value or raises."
+
+[click]
+"Cast: fire-and-forget. Used for things like 'rebalance yourself.'"
+
+[click]
+"Multicall: parallel fan-out across the cluster, results keyed by node. We'll run this one live in a moment."
+
+[click]
+"Compare this to gRPC or any other RPC framework you've used. No .proto files. No code generation. No client/server scaffolding. No serializer config. Just a function reference and an argument list."
+
+[Don't rattle through the missing pieces — let each absence register, especially with the backend folks in the room.]
 -->
 
 ---
@@ -608,10 +771,25 @@ The dashboard isn't talking to a service. It's calling a function on three BEAMs
 </div>
 
 <!--
-Live demo — pre-staged iex session in the dashboard.<br>
-Run multicall once with 0 workers, point at the Nodes card showing all green.<br>
-If the demo gods are angry, fall back to a screenshot of the output. Don't fight it.<br>
-The "calling a function on three BEAMs" line is the payoff — let it land.
+[Pre-flight: iex pre-staged in the dashboard's iex tab. 4 nodes connected. Workers = 0.]
+
+[Say:]
+"I'm going to run that multicall live."
+
+[Switch to terminal. Run:]
+:erpc.multicall([node() | Node.list()], Heartbeats.Placement, :stats, [])
+
+"Three nodes. All zero workers. One function call."
+
+[Switch back to dashboard. Hover the Nodes card.]
+"This card on the dashboard runs that exact call on every tick."
+
+[click]
+"The dashboard isn't talking to a service. It's calling a function on three BEAMs in parallel."
+
+[Let it land. Advance.]
+
+[Failure mode: if iex is dead, show a pre-captured screenshot. Say "trust the previous run — the output is the same" and move on.]
 -->
 
 ---
@@ -662,8 +840,23 @@ And we don't want a registry. We want a placement <em>function</em>.
 </v-click>
 
 <!--
-This is the pivot moment. Show the naïve code, let the room think "yeah okay so just use this," then break it on the second click.<br>
-The third click sets up §4: we need a placement *function*, not a placement *service*.
+[Read the bridge aloud:]
+"Three primitives — membership, lifecycle, RPC. Compose them and you get placement: this worker, on that node. Here is the first cut:"
+
+[Let them read the code. It's short.]
+
+[click]
+"Works…"
+
+[Brief pause — let the room think "yeah, okay."]
+
+[click]
+"…until a node leaves. The other nodes have no way to compute 'what was on the dead one' without a registry."
+
+[click]
+"And we don't want a registry. We want a placement function."
+
+[Brief pause. This sets up §4. Advance.]
 -->
 
 ---
@@ -691,8 +884,16 @@ Consistent hashing delivers both.
 </div>
 
 <!--
-This slide is the bridge into §4. The two requirements (deterministic + stable) are exactly what consistent hashing delivers.<br>
-End on "cue the ring" with energy — the next 7 minutes are the heart of the talk.
+[click]
+"Same key → same node, on every node, without coordination."
+
+[click]
+"One membership change → small reassignment. Not 75%."
+
+[click]
+"Consistent hashing delivers both."
+
+[End with energy — the next 7 minutes are the heart of the talk. Advance.]
 -->
 
 ---
@@ -706,8 +907,12 @@ layout: section
 </div>
 
 <!--
-7 minutes. Picture-first explanation, then libring as the implementation.<br>
-No framework comparison — just teach the algorithm and show the code.
+[Say:]
+"Section four — consistent hashing, and the libring library that gives us placement as a pure function."
+
+[Pause. Advance.]
+
+[Budget: ~7 min through end of §4. Picture-first, then four lines of code.]
 -->
 
 ---
@@ -750,8 +955,21 @@ Every membership change = mass migration. We have deterministic, but not stable.
 </v-click>
 
 <!--
-Show the most obvious deterministic placement function. The audience will see it and think "wait, isn't that fine?" — then watch it fall over.<br>
-The point is: deterministic alone isn't enough. We need deterministic AND stable.
+[Say:]
+"The simplest deterministic placement function is mod-N. Let's see if it works."
+
+[Let them read the two lines of code.]
+
+[click]
+"Deterministic. Same key → same node. So far, so good."
+
+[click]
+"…until you add a 4th node. About 75% of items move."
+
+[click]
+"Every membership change is a mass migration. Deterministic — yes. Stable — no."
+
+[Set up the next slide: a visual that makes this concrete.]
 -->
 
 ---
@@ -763,11 +981,13 @@ clicks: 1
 <ModNReshuffle :clicks="$clicks" class="mt-2" />
 
 <!--
-Click 0: 3 columns, 12 items at their mod-3 slots (4 per column). Counter reads "12 · placed".<br>
-Click 1: the 4th column slides in from the right. Items snap to their new mod-4 slots. The 9 items whose column changed flash with a rose ring. Counter alerts in rose: "reassigned: 9 / 12". Caption fades in: "deterministic ≠ stable."<br>
-<br>
-Narrate: "12 items, 3 columns, mod-N gives us a nice even spread. Now add a 4th column. Watch what moves."<br>
-*click* "Nine of twelve. Deterministic — yes. Stable — no. That's what the ring fixes."
+[Say:]
+"Twelve items, three columns. Mod-N gives us a nice even spread. Now add a 4th column. Watch what moves."
+
+[click]
+"Nine of twelve. That's what the ring fixes."
+
+[Advance.]
 -->
 
 ---
@@ -781,8 +1001,12 @@ layout: section
 </div>
 
 <!--
-Section divider so the audience knows we're switching modes — from "here's why mod-N is broken" to "here's the picture that fixes it."<br>
-The next slide is the heaviest visual in the deck. Give it room.
+[Brief pause for the topic shift.]
+
+[Say:]
+"The ring — same problem, different topology."
+
+[Advance. Next slide is the heaviest visual in the deck. Give it room.]
 -->
 
 ---
@@ -794,17 +1018,28 @@ clicks: 6
 <HashRing :clicks="$clicks" class="mt-2" />
 
 <!--
-Seven frames, six clicks. Narrate as you advance:<br>
-<br>
-0 — Frame 1: "Every key — subscription id, tenant id, whatever — hashes to a point on the ring."<br>
-*click* — Frame 2: "Walk clockwise. First node you hit owns the key. With one node, trivially everyone goes to A."<br>
-*click* — Frame 3: "With four nodes, each owns the arc clockwise of its predecessor. Items inherit the arc's color."<br>
-*click* — Frame 4: "Adding E only steals from its clockwise neighbor's arc. ~1/N moves. Mod-N moved ~12/16."<br>
-*click* — Frame 5: "Now back to our 4-node baseline. This is the picture we started with."<br>
-*click* — Frame 6: "Remove B. Same property, in reverse — only B's arc redistributes. 4 of 16 items move."<br>
-*click* — Frame 7: "Real ring libraries place each node ~128 times around the ring as 'vnodes'. That's how the spread stays even — and when a node dies, its load redistributes across EVERY survivor."<br>
-<br>
-The vnode bridge to the live demo matters: §5's scale-down will show all three survivors picking up an even share of the dead node's work — that's vnodes earning their keep.
+[Say:]
+"Every key — subscription id, tenant id, whatever — hashes to a point on the ring."
+
+[click]
+"Walk clockwise. First node you hit owns the key. With one node, everyone goes to A."
+
+[click]
+"With four nodes, each owns the arc clockwise of its predecessor. Items inherit the arc's color."
+
+[click]
+"Adding E only steals from its clockwise neighbor's arc. About 1/N moves. Mod-N moved 12 of 16."
+
+[click]
+"Now back to our 4-node baseline. This is the picture we started with."
+
+[click]
+"Remove B. Same property in reverse — only B's arc redistributes. Four of sixteen items move."
+
+[click]
+"Real ring libraries place each node about 128 times around the ring — 'vnodes.' That's how the spread stays even, and when a node dies, its load redistributes across EVERY survivor, not just one neighbor."
+
+[The vnode bridge to the live demo matters: §5's scale-down shows all three survivors picking up an even share. That's vnodes earning their keep.]
 -->
 
 ---
@@ -852,10 +1087,21 @@ Bonus: with 4 nodes placed randomly on the ring you might get clumping and uneve
 </v-click>
 
 <!--
-The diagram showed the *what*; this slide explains the *why*.<br>
-The key insight: without vnodes, a :nodedown is catastrophic for the single neighbor that inherits everything. With vnodes, it's a small bump for every survivor.<br>
-The bonus paragraph (smoother spread, weighted capacity) is worth saying once but don't dwell — the main point is the failure-mode story.<br>
-This sets up the §5 live demo: when we kill a node, all three survivors should pick up roughly equal slices. That's only true because of vnodes.
+[The diagram showed the WHAT; this slide explains the WHY.]
+
+[click]
+"Without vnodes, each node owns one big arc. When it dies, the entire arc transfers to its single clockwise neighbor — that neighbor now carries 2× its previous load. Everyone else: untouched."
+
+[click]
+"With ~128 vnodes per real node, those arcs are scattered around the ring. When a node dies, its 128 arcs each fall to whoever's clockwise — statistically across every surviving real node."
+
+[click]
+"Same one-over-N items move. Distributed evenly instead of dumped on one neighbor."
+
+[click]
+"Bonus — vnodes smooth out random placement, and you can give a beefier box 256 vnodes for 2× the load."
+
+[Don't dwell on the bonus. The failure-mode story is the main point.]
 -->
 
 ---
@@ -883,8 +1129,13 @@ The mental model is done. Now — what does this look like in code?
 </div>
 
 <!--
-A breather slide between the diagram and the library. The audience just absorbed a lot of motion; let the two properties settle before we show config.<br>
-This is also the slide to point back at if anyone asks "wait, why again does this work?"
+[Walk through both briefly:]
+"Two properties. Deterministic — same key plus same membership equals same node, on every node, locally. Stable — one membership change moves about one-over-N items, not 75%."
+
+[click]
+"The mental model is done. Now — what does this look like in code?"
+
+[A breather slide between the diagram and the library — point back here if anyone later asks "wait, why does this work?" Advance.]
 -->
 
 ---
@@ -917,7 +1168,16 @@ That's it. Config + a function call.
 </v-click>
 
 <!--
-Beat after the diagram. Show the library as anticlimax — the audience just learned the algorithm; the code is small because the algorithm is small.
+[Say:]
+"libring. Here's the config — turn on monitor_nodes, name the ring."
+
+[click]
+"And here's the lookup. HashRing.Managed.key_to_node, ring name, key. Returns the owner node."
+
+[click]
+"That's it. Config plus a function call."
+
+[The library is anticlimax — they just learned the algorithm; the code is small because the algorithm is small. Advance.]
 -->
 
 ---
@@ -961,8 +1221,19 @@ The GenServer shape from §3, used inside libring. You'll see it once more in yo
 </v-click>
 
 <!--
-This is where the pedagogical payoff lands. The audience saw the GenServer-with-monitor_nodes shape in §3; libring uses it internally; they'll see it once more in §5 (Placement) on a slide.<br>
-Land "same primitive, same job, twice" — that's the talk's spine.
+[Say:]
+"Notice this flag — sound familiar?"
+
+[click]
+"libring hooks net_kernel.monitor_nodes internally. Same primitive you saw in §3."
+
+[click]
+"By the time YOUR code asks 'who owns key X?', the ring is already correct."
+
+[click]
+"The GenServer shape from §3, used inside libring. You'll see it once more in your own code in §5."
+
+[Land "same primitive, same job, twice" — that's the talk's spine. Advance.]
 -->
 
 ---
@@ -998,9 +1269,18 @@ end
 </v-click>
 
 <!--
-Show the actual file — lib/heartbeats/ring.ex. It really is this short.<br>
-The cordon hook is the seed for §6. Don't explain it yet; just plant it.<br>
-The real module also exports uncordon/1, but we don't show it — in production a restarted pod is a new node (new BEAM, new name), so we never need to "uncordon" the same node back in. :nodeup handles it.
+[Say:]
+"This is the actual Heartbeats.Ring module from the codebase. Three functions of meaningful code — owner wraps key_to_node, members wraps nodes, cordon wraps remove_node."
+
+[click]
+"owner is the only function placement code calls on the hot path."
+
+[click]
+"cordon is how we'll drive zero-downtime deploys in §6. Hold that thought."
+
+[The cordon hook is the seed for §6 — don't explain it yet; just plant it. Advance.]
+
+[The real module also exports uncordon/1, but we don't show it: in production a restarted pod is a new node (new BEAM, new name), so :nodeup handles re-adding. If asked, that's the answer.]
 -->
 
 ---
@@ -1014,8 +1294,12 @@ layout: section
 </div>
 
 <!--
-7 minutes. The scheduler is three lines because §3 and §4 did the work.<br>
-The htop callback at the end of this section is the visceral payoff of §1.
+[Say:]
+"Section five — putting it together. Placement is three lines because §3 and §4 did all the work."
+
+[Pause. Advance.]
+
+[Budget: ~7 min through end of §5. The htop callback at the end is the visceral payoff of §1.]
 -->
 
 ---
@@ -1050,8 +1334,18 @@ Ask the ring who owns it. Call the function on that node. Done.
 </v-click>
 
 <!--
-Let this slide breathe. The whole talk has been building to "and here's how short the actual code is."<br>
-Three lines. Two of them are doing real work.
+[Let them read the three lines.]
+
+[Say:]
+"That's the entire scheduler. Three lines."
+
+[click]
+"No queue. No dispatcher. No coordinator."
+
+[click]
+"Ask the ring who owns it. Call the function on that node. Done."
+
+[Let this slide breathe. The whole talk has been building to "and here's how short the actual code is." Advance.]
 -->
 
 ---
@@ -1085,9 +1379,15 @@ Same primitive libring uses internally. Same job, different consumer.
 </v-click>
 
 <!--
-This is the payoff to the "you'll see this again" promise from §3.<br>
-Same monitor_nodes(true) in init. Same handle_info for :nodeup/:nodedown.<br>
-The point: it's the BEAM-native shape for "react to cluster membership" — libring uses it, your placement code uses it, same primitive doing the same job.
+[Say:]
+"Placement is a GenServer. init calls monitor_nodes. handle_info reacts to :nodeup and :nodedown by calling rebalance_local."
+
+"This is the GenServer shape from §3 — the one libring uses internally. Now in YOUR code."
+
+[click]
+"Same primitive, same job, different consumer."
+
+[Land the payoff to the §3 promise. Advance.]
 -->
 
 ---
@@ -1128,8 +1428,16 @@ That's the BEAM-native shape: every process is responsible for itself.
 </v-click>
 
 <!--
-The "each process responsible for itself" line is doing real work.<br>
-It's why there's no convergence window, no handoff protocol, no central state — the cluster is decentralized because the workers are.
+[Walk through the code:]
+"For each local worker, ask the ring who owns it. If we're still the owner, do nothing. Otherwise, RPC the new owner to start a replacement, then stop ourselves."
+
+[click]
+"Each worker decides for itself. No central mover. No coordinator yanking processes around."
+
+[click]
+"That's the BEAM-native shape — every process is responsible for itself."
+
+[This is why there's no convergence window, no handoff protocol, no central state — the cluster is decentralized because the workers are. Advance.]
 -->
 
 ---
@@ -1141,14 +1449,18 @@ clicks: 2
 <NodedownRecovery :clicks="$clicks" class="mt-2" />
 
 <!--
-Walk through the diagram BEFORE the live demo — sets up what they're about to watch happen.<br>
-Click 0: 4 nodes, 4 workers each (16 total). Counter: "workers: 16 · A:4 B:4 C:4 D:4".<br>
-Click 1: B's card greys out and becomes dashed. <code>:nodedown</code> envelopes fan out from B to A/C/D. B's 4 workers float below B's old card, pulsing amber. Counter alerts in rose: ":nodedown — 4 workers orphaned".<br>
-Click 2: orphan workers fly to A (2), C (1), D (1). Survivor counts bump (with a small scale-pulse on the count label) — A:6, C:5, D:5. Counter goes green: "workers: 16 · A:6 C:5 D:5 · moved: 4 / 16".<br>
-<br>
-Narrate: "Four nodes, sixteen workers." *click* "B dies. Every survivor hears :nodedown — the runtime tells them." *click* "B's four workers redistribute across the survivors. Total worker count: unchanged. Only ~1/4 moved."<br>
-<br>
-This is the SLO promise in miniature — same flat-total story as the rolling-deploy timeline in §6, just for one failure.
+[Walk through the diagram BEFORE the live demo — sets up what they're about to watch happen.]
+
+[Say:]
+"Four nodes, sixteen workers."
+
+[click]
+"B dies. Every survivor hears :nodedown — the runtime tells them."
+
+[click]
+"B's four workers redistribute across the survivors. Total worker count: unchanged. Only one-over-N moved."
+
+[This is the SLO promise in miniature — same flat-total story as §6's rolling-deploy timeline, just for one failure. Advance.]
 -->
 
 ---
@@ -1172,10 +1484,31 @@ layout: center
 </div>
 
 <!--
-The audience just saw the cartoon version of this on the previous slide — now watch it happen for real.<br>
-Run the demo against the 4-node cluster. The dashboard shows the worker count per node updating live.<br>
-The point to land: only ~1/4 of workers actually moved. That's the ring's stability property in action.<br>
-If the demo feels too fast in the room, run it twice. The "boring" recovery IS the punch line.
+[Pre-flight: 4-node cluster running, dashboard open, all nodes connected, callbacks counter visible.]
+
+[Say:]
+"The audience just saw the cartoon. Now watch it happen for real."
+
+[Demo (~2 min):]
+
+1. Click Spawn (50 subscriptions @ 5s). Watch the cards even out.
+   "Fifty subscriptions, spread evenly. Roughly twelve or thirteen per node."
+
+2. Stop node d.
+   "Stop d. Watch the survivors — they each absorb a slice."
+
+3. Survivor counts rebound ~12 → ~16.
+   "About one-quarter of the workers moved. The other three-quarters stayed put."
+
+4. Restart node d.
+   "Bring d back. Workers redistribute back toward even."
+
+5. Point at the callbacks-received counter.
+   "And the callbacks counter never stopped climbing — the SLO held the whole time."
+
+[The "boring" recovery IS the punch line. If demo feels too fast, run it twice.]
+
+[Failure mode: if a node won't come back up, skip step 4. The scale-down half is the load-bearing one.]
 -->
 
 ---
@@ -1199,10 +1532,12 @@ layout: center
 </div>
 
 <!--
-THIS is the visceral payoff of the whole talk. Hold it.<br>
-The §1 image resolves here. The audience has been waiting (without knowing it) for the right-hand picture since slide 6.<br>
-Don't narrate over it — just let them see it. If you say anything, say: "same workload. same cores. just placed."<br>
-This is the slide they'll remember in the hallway after the talk.
+[Hold the silence. This is the visceral payoff of the whole talk — §1's htop image, resolved.]
+
+[If you say anything, just read the title aloud:]
+"Same workload. Same cores. Just placed."
+
+[Don't narrate over it. Let them see it. This is the slide they'll remember in the hallway.]
 -->
 
 ---
@@ -1216,7 +1551,12 @@ layout: section
 </div>
 
 <!--
-6 minutes. The payoff. Cordon + drain fall out of the same primitives we've been using.
+[Say:]
+"Section six — zero-downtime deploys. The payoff. Same primitives we've been using, doing the real production work."
+
+[Pause. Advance.]
+
+[Budget: ~6 min through end of §6.]
 -->
 
 ---
@@ -1238,10 +1578,21 @@ A <code>kubectl rollout restart</code> sends SIGTERM to each pod in turn. The BE
 </div>
 
 <!--
-This slide is conceptual — no Elixir code. Cordon + drain are built on Ring + :erpc; no new mechanism.<br>
-No "uncordon" — in production, a restarted pod is a brand new BEAM node with a new name. It joins via libcluster, :nodeup fires, ring updates. Uncordon was only useful for the in-place demo where the same node comes back.<br>
-The kubectl paragraph is what makes it real for the audience — they all know what a rollout restart is, and now they know what's happening inside their cluster when it fires. Sets up the GracefulShutdown slide that comes next.<br>
-Speak the kubectl line slowly: SIGTERM → terminate/2 → cordon → drain → exit. New pod → :nodeup → ring updates.
+[Say:]
+"Two operations are enough to drive a clean shutdown — cordon and drain."
+
+[click]
+"Cordon: remove a node from the ring everywhere. Workers on the cordoned node see 'I'm not the owner anymore' on their next rebalance tick. Built on Ring plus :erpc — no new mechanism."
+
+[click]
+"Drain: wait for the local worker count to hit zero. No central tracking; just poll WorkerSupervisor."
+
+[click]
+"And here's how this lands in production. kubectl rollout restart sends SIGTERM to each pod in turn. The BEAM catches it, runs GracefulShutdown.terminate/2, cordons, drains, then exits. The replacement pod is a NEW node — it joins on startup, :nodeup fires everywhere, ring picks it up. No orchestrator code."
+
+[Speak the kubectl sequence slowly: SIGTERM → terminate/2 → cordon → drain → exit → new pod → :nodeup → ring updates. Each arrow is a primitive we've already learned. Advance.]
+
+[On the uncordon question if asked: in production a restarted pod is a brand new BEAM node with a new name. :nodeup handles re-adding. Uncordon only matters when the same node comes back, which doesn't happen on real deploys.]
 -->
 
 ---
@@ -1280,10 +1631,19 @@ Last child in the supervision tree. <code>terminate/2</code> runs <em>before</em
 </div>
 
 <!--
-Say aloud: "kubectl rollout restart looks identical to clicking the dashboard button." Don't put it on the slide — the slide is already busy.<br>
-Don't claim this is "the monitor_nodes shape again" — it's not. trap_exit is a different primitive (process lifecycle vs. cluster lifecycle).<br>
-The honest framing is the broader pattern: the BEAM hands you lifecycle events; you subscribe and react. monitor_nodes and trap_exit are two instances of that.<br>
-The fact that terminate/2 runs before children get stopped is the load-bearing detail — that's how we get to drain cleanly before shutdown.
+[Walk through the code:]
+"Last child in the supervision tree. init traps exits. terminate cordons this node, kicks rebalance, then drains until empty."
+
+[click]
+"Being the last child means terminate/2 runs BEFORE the rest of the app stops — that's how we get to drain cleanly before shutdown."
+
+[click]
+"trap_exit is a PROCESS-lifecycle hook; monitor_nodes was a CLUSTER-lifecycle one. Different events, same idea: the runtime tells you when something changes — you subscribe and react."
+
+[Then say aloud (not on slide):]
+"kubectl rollout restart looks identical to clicking the dashboard button."
+
+[Don't claim this is "the monitor_nodes shape again" — it's not. trap_exit is a different primitive. The honest framing is the broader pattern: the BEAM hands you lifecycle events; you subscribe and react.]
 -->
 
 ---
@@ -1295,17 +1655,15 @@ clicks: 1
 <RollingDeployTimeline :clicks="$clicks" class="mt-2" />
 
 <!--
-Walk the audience through the predicted shape BEFORE the live demo — they'll know what to watch for when the dashboard does the real thing.<br>
-<br>
-Click once to start the sweep. The playhead crosses left-to-right over ~5 seconds.<br>
-<br>
-Watch each lane in turn: B cordons (yellow), drains (orange), restarts (gray), comes back active (green). Then C. Then D. Then A.<br>
-<br>
-The worker-count line at the bottom stays FLAT. That's the SLO. That's the punchline.<br>
-<br>
-Narration: "Watch the line at the bottom. Lanes change color — work is moving. But the total worker count never moves. That's the whole talk in one image."<br>
-<br>
-If you want to replay, just navigate away and back. The animation re-fires on slide entry.
+[Walk the audience through the predicted shape BEFORE the live demo — they'll know what to watch for.]
+
+[Say:]
+"Four lanes — one per node. Each lane goes active, cordoned, draining, restarting, then back to active. Watch the line at the bottom: that's total active workers across the whole cluster."
+
+[click]
+"Lanes change color — work is moving. But the total worker count never moves. That's the whole talk in one image."
+
+[Pause. Let the flat line land. If you want to replay, navigate away and back.]
 -->
 
 ---
@@ -1331,9 +1689,27 @@ layout: center
 </div>
 
 <!--
-The audience just saw the predicted timeline (flat worker-count line). Now show them the real dashboard doing the same thing.<br>
-Two demos in one: graceful rotation, then violent failure. Both look identical from the dashboard's perspective.<br>
-The callbacks counter is the SLO — its uninterrupted climb is the whole point.
+[Pre-flight: 4-node cluster, workers spread evenly, dashboard open with Rolling Deploy button visible, callbacks counter visible.]
+
+[Say:]
+"The audience just saw the predicted timeline. Now the real dashboard."
+
+[Demo (~2 min):]
+
+1. Click Rolling Deploy. Talk over the ~20s rotation:
+   - "Watch B's worker count hit zero — that's the drain."
+   - "Watch A, C, and D absorb evenly — that's the ring."
+   - "Watch the callbacks counter — that's the SLO."
+
+2. In one iex: Ctrl-C, a to hard-kill node D.
+   ":nodedown recovery in about five seconds. Survivors pick up D's work."
+
+3. Restart D.
+   ":nodeup, workers redistribute back."
+
+[Two demos in one: graceful rotation, then violent failure. Both look identical from the dashboard's perspective. The callbacks counter's uninterrupted climb is the whole point.]
+
+[Failure mode: if Rolling Deploy hangs, skip to the hard-kill — it's the more memorable half.]
 -->
 
 ---
@@ -1343,7 +1719,12 @@ layout: section
 # 7. Caveats
 
 <!--
-2 minutes. Earn trust by being honest about boundaries. Keep it short.
+[Say:]
+"Section seven — caveats. Quick. Where this approach doesn't fit."
+
+[Pause. Advance.]
+
+[Budget: ~2 min through end of §7.]
 -->
 
 ---
@@ -1395,8 +1776,25 @@ layout: section
 </div>
 
 <!--
-Five caveats, one click each. Don't dwell — the room knows you're being honest.<br>
-These are honest boundaries of placement-by-hash; we're not steering anyone to a different library here.
+[Say:]
+"Five caveats, briefly. Where placement-by-hash doesn't fit."
+
+[click]
+"Workers pinned to a node — local file, GPU, attached disk. Breaks the model."
+
+[click]
+"Expensive warm-up state. If workers are stateful between events, you need to checkpoint or accept a re-warm on migration."
+
+[click]
+"Flap windows. If a node bounces nodedown to nodeup in under a second, a worker can move twice."
+
+[click]
+"Cluster size at a thousand-plus nodes. Every node holding the full ring stops being free — shard the ring or use a different model."
+
+[click]
+"Diverged membership views. libring assumes every node sees the same membership; get your libcluster config right."
+
+[Don't dwell. The room knows you're being honest. Advance.]
 -->
 
 ---
@@ -1404,6 +1802,15 @@ layout: section
 ---
 
 # 8. Wrap
+
+<!--
+[Say:]
+"Section eight — wrap. Three things to leave the room with, then we land the opening question."
+
+[Pause. Advance.]
+
+[Budget: ~2 min through end of §8, then Q&A.]
+-->
 
 ---
 
@@ -1429,8 +1836,19 @@ layout: section
 </div>
 
 <!--
-The three things to leave the room with.<br>
-The middle one — "one shape, four times" — is the pedagogical takeaway. The audience has now seen monitor_nodes used four times in the talk; if they remember nothing else, they remember the shape.
+[Say:]
+"Three things to leave the room with."
+
+[click]
+"About 200 lines of application code. The runtime gave us cluster membership, monitoring, and :erpc for free."
+
+[click]
+"One primitive, two consumers. A GenServer that calls monitor_nodes and reacts to :nodeup / :nodedown. libring uses it internally. Placement uses it in your code. Same primitive, same job."
+
+[click]
+"No library between you and the runtime. When something goes wrong at 3am, the whole stack is in your codebase."
+
+[The middle bullet is the pedagogical takeaway — if they remember nothing else, they remember the GenServer shape.]
 -->
 
 ---
@@ -1442,12 +1860,17 @@ clicks: 1
 <ClosingImage :clicks="$clicks" class="mt-2" />
 
 <!--
-Click 0: the opener's exact picture — two clouds (register? / talk to me?), arrows to the cluster, two pulsing question marks. Same image they saw 40 minutes ago.<br>
-Click 1: the question marks fade. The ring overlay materializes around the cluster (translucent amber stroke + vnode confetti). The arrow labels become <code>:erpc.call</code> and <code>Ring.owner/1</code>. Caption fades in: "these primitives — that's the whole talk."<br>
-<br>
-Narrate: "Forty minutes ago I asked: which node runs the GenServer for X, and how does any other node send it a message?" *pause* *click* "Ring.owner answers the first question. :erpc answers the second. That's the whole talk."<br>
-<br>
-Hold the final frame while you say thanks.
+[Same image they saw 40 minutes ago. Pause for recognition.]
+
+[Say:]
+"Forty minutes ago I asked: which node runs the GenServer for X, and how does any other node send it a message?"
+
+[Pause.]
+
+[click]
+"Ring.owner answers the first question. :erpc answers the second. That's the whole talk."
+
+[Let "the whole talk" land. Then advance to Thanks for Q&A.]
 -->
 
 ---
@@ -1466,10 +1889,12 @@ class: text-center
 
 <div class="mt-12 text-2xl text-amber-400 font-semibold">
 
-These primitives. That's the whole talk.
+Questions?
 
 </div>
 
 <!--
-The closing line. Same shape, every time.
+[The closing line landed on the previous slide (Two Answers). This slide is utilitarian — repo, slides, and an explicit Q&A invitation.]
+
+[Stay here for the whole Q&A. The audience can read the URL while you talk.]
 -->
