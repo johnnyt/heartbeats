@@ -6,7 +6,7 @@ defmodule Heartbeats.Ring do
   `monitor_nodes: true`), which keeps membership in sync with `Node.list/0`
   automatically. This module exposes the only operations the rest of the app
   cares about: looking up the owning node for a key, listing members, and
-  cordoning/uncordoning a node (e.g. for graceful drain or chaos demos).
+  cordoning/uncordoning a node (e.g. for graceful drain during a rolling deploy).
   """
 
   @ring :heartbeats

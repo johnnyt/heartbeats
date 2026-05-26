@@ -18,8 +18,6 @@ the cross-node `:erpc` routing, and the cordon/drain orchestration.
   ring + RPC.
 - **Rolling deploy**: cordon → drain → uncordon, one node at a time, with
   zero dropped subscriptions during the rotation.
-- **Chaos**: brutally terminate every worker on a random node, watch the
-  cluster recover.
 
 ## Stack
 
@@ -81,18 +79,7 @@ Bigger demo: spawn 100 at 2s. Or via `iex`:
 Heartbeats.register_many(100, %{interval_ms: 2_000})
 ```
 
-### 2. Inject Chaos
-
-Click **Inject Chaos**. A random node is picked; every worker on it is
-terminated. A red banner appears for ~2.5s while the cluster recovers, then
-the worker count rebounds to its previous value as `Placement.rebalance_local`
-re-adopts the orphaned subscriptions on the same node.
-
-This demonstrates: workers are processes, processes can die, but the
-subscriptions don't go with them — they're rows in Postgres, and the
-placement layer notices the gap.
-
-### 3. Rolling Deploy
+### 2. Rolling Deploy
 
 Click **Rolling Deploy**. One node at a time:
 
@@ -106,10 +93,13 @@ Click **Rolling Deploy**. One node at a time:
 Total worker count across surviving nodes stays constant. The "callbacks
 received" counter keeps climbing — no perceptible gap.
 
-This is what a real Kubernetes rolling restart looks like, just compressed
-into ~15 seconds.
+This is the in-place version of what a `kubectl rollout restart` triggers
+on a real Kubernetes cluster — same cordon → drain → rejoin lifecycle,
+just compressed into ~15 seconds. (In production each restarted pod is a
+new BEAM node; here we cycle the same one and call `uncordon` to bring it
+back into the ring.)
 
-### 4. Hard kill
+### 3. Hard kill
 
 In one of the iex sessions: `Ctrl-C, a` (or kill the BEAM externally).
 Surviving nodes detect `:nodedown`, libring removes the dead node from the
@@ -120,7 +110,7 @@ module's `terminate/2` fires *first* (it's the last child in the
 supervision tree), cordons the node, calls `rebalance_local/0`, and waits
 for workers to migrate off before the BEAM exits.
 
-### 5. Clear
+### 4. Clear
 
 Click **Clear all subscriptions**. Every node's worker count drops to 0,
 every Subscriptions row is deleted, every callback counter resets.
@@ -146,8 +136,8 @@ config :libring,
 join or leave. We never call `add_node`/`remove_node` ourselves outside of
 the cordon/uncordon paths.
 
-That's it. Everything else (placement, rebalance, chaos recovery, rolling
-deploy) is built on top of these two primitives.
+That's it. Everything else (placement, rebalance, rolling deploy) is built
+on top of these two primitives.
 
 ## Architecture
 
@@ -187,7 +177,6 @@ Heartbeats.register/1
 | [`Heartbeats.Worker`](lib/heartbeats/worker.ex) | Per-subscription GenServer. Sends HTTP heartbeats; on `:rebalance` self-migrates if the ring owner changed |
 | [`Heartbeats.Subscription`](lib/heartbeats/subscription.ex) | Ecto schema — `id` (UXID), `callback_url`, `interval_ms`, `verifier`, `callbacks_count` |
 | [`Heartbeats.Subscriptions`](lib/heartbeats/subscriptions.ex) | Repo wrapper — `put/get/all/count/delete/purge_local` |
-| [`Heartbeats.Chaos`](lib/heartbeats/chaos.ex) | `random_kill/0` picks a random ring member and terminates its workers; visible recovery delay |
 | [`Heartbeats.RollingDeploy`](lib/heartbeats/rolling_deploy.ex) | GenServer driving cordon → drain → uncordon for each node in turn |
 | [`Heartbeats.GracefulShutdown`](lib/heartbeats/graceful_shutdown.ex) | Last child in the supervision tree; SIGTERM-triggered drain |
 | [`HeartbeatsWeb.ClusterLive`](lib/heartbeats_web/live/cluster_live.ex) | Real-time dashboard at `/` |
@@ -222,6 +211,24 @@ mix quality               # full umbrella: format, credo, dialyzer, tests, cover
 Multi-node tests use OTP's `:peer` (Phoenix tests use the standard sandbox;
 cluster tests switch the Repo to `:auto` mode in `setup_all` since peers
 on different BEAM nodes can't share a sandbox checkout).
+
+## Conference talk
+
+This demo backs a conference talk — *Spreading Long-Running Workloads
+Across an Elixir Cluster* — that walks through the same primitives
+(`Node.list`, `monitor_nodes`, `:erpc`, consistent hashing) by example.
+
+Slides live in [`docs/slides/`](docs/slides/) — Slidev deck. See its
+[README](docs/slides/README.md) for details.
+
+```sh
+cd docs/slides
+npm install
+npm run dev          # opens http://localhost:3030
+```
+
+Press `p` for presenter mode (notes + click-aligned cues) or `o` for the
+overview.
 
 ## Scope of this demo
 
